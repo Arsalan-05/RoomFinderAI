@@ -1,5 +1,6 @@
 const express = require('express');
 const cors = require('cors');
+const axios = require('axios');
 const app = express();
 const port = 3000;
 
@@ -7,48 +8,101 @@ const port = 3000;
 app.use(cors());
 app.use(express.json());
 
+// Google Maps API key (replace with your own)
+const GOOGLE_API_KEY = 'AIzaSyBzE8cPfeO5YkmpJFc8SLtVsz_eGB-wYYM'; // Replace with your API key from https://console.cloud.google.com/
+
+// Override map for problematic North American cities
+const locationOverrides = {
+    'los angeles': 'la',
+    'los angeles, ca': 'la',
+    'new york': 'nyc',
+    'new york, ny': 'nyc',
+    'saint john': 'saint-john',
+    'saint john, nb': 'saint-john',
+    'mexico city': 'mexico-city',
+    'mexico city, mexico': 'mexico-city',
+    'saint louis': 'stlouis',
+    'saint louis, mo': 'stlouis',
+    'quebec city': 'quebec',
+    'quebec city, qc': 'quebec',
+    'washington': 'dc',
+    'washington, dc': 'dc'
+};
+
+// Helper function to normalize city name to Marketplace slug
+function normalizeCityToSlug(city) {
+    if (!city) return '';
+    const lowerCity = city.toLowerCase();
+    return locationOverrides[lowerCity] || lowerCity
+        .replace(/[^a-z0-9\s]/g, '') // Remove special characters
+        .replace(/\s+/g, ''); // Remove spaces
+}
+
+// Helper function to get city slug via Google Maps Geocoding API
+async function getCitySlug(location) {
+    try {
+        // Restrict to North America using components filter
+        const response = await axios.get(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(location)}&components=continent:North%20America&key=${GOOGLE_API_KEY}`
+        );
+        const cityComponent = response.data.results[0]?.address_components.find(c => c.types.includes('locality'));
+        const city = cityComponent ? cityComponent.short_name : null;
+        const slug = city ? normalizeCityToSlug(city) : '';
+        console.log(`Geocoded location: ${location} -> City: ${city || 'none'}, Slug: ${slug || 'none'}`);
+        return slug;
+    } catch (error) {
+        console.error('Geocoding error:', error.message);
+        return ''; // Fallback to locationless URL
+    }
+}
+
 // Helper function to predict and generate Marketplace URL
-function generateMarketplaceUrl({ location, price, size, amenities }) {
-    // Norlize inputs for Marketplace search
-    const normalizedLocation = encodeURIComponent(location.trim().replace(/\s+/g, '-')); // e.g., "Downtown NYC" -> "Downtown-NYC"
+async function generateMarketplaceUrl({ location, price, size, amenities }) {
+    // Get Marketplace slug via Google Maps API
+    const normalizedLocation = await getCitySlug(location);
+    console.log(`Input location: ${location}, Normalized: ${normalizedLocation || 'none'}`); // Debug log
+
+    // Encode for URL
+    const encodedLocation = encodeURIComponent(normalizedLocation);
+
     const priceNum = parseInt(price);
     const sizeNum = parseInt(size);
 
-    // Predict price range (e.g., ±10% of input price)
+    // Predict price range (±10% of input price)
     const minPrice = Math.floor(priceNum * 0.9);
     const maxPrice = Math.ceil(priceNum * 1.1);
 
-    // Predict size range (e.g., ±50 sq ft)
-    const minSize = Math.floor(sizeNum - 50);
-    const maxSize = Math.ceil(sizeNum + 50);
-
-    // Convert amenities to Marketplace keywords (simple mapping)
+    // Convert amenities to Marketplace keywords
     const amenityKeywords = amenities
         ? amenities.split(',').map(a => encodeURIComponent(a.trim())).join('%20')
         : '';
 
     // Construct Marketplace search URL
-    // Example: https://www.facebook.com/marketplace/nyc/search?minPrice=1000&maxPrice=1500&query=apartment%20wifi
     let query = 'apartment'; // Base query for rooms/apartments
     if (amenityKeywords) query += `%20${amenityKeywords}`;
+    if (!normalizedLocation) query += `%20${encodeURIComponent(location)}`; // Add location to query if no slug
 
     const baseUrl = 'https://www.facebook.com/marketplace';
-    const searchUrl = `${baseUrl}/${normalizedLocation}/search?minPrice=${minPrice}&maxPrice=${maxPrice}&query=${query}`;
+    const locationPath = normalizedLocation ? `/${encodedLocation}` : '';
+    const searchUrl = `${baseUrl}${locationPath}/search?minPrice=${minPrice}&maxPrice=${maxPrice}&query=${query}`;
 
     return searchUrl;
 }
 
 // API Endpoint to predict and generate URL
-app.post('/api/predict', (req, res) => {
+app.post('/api/predict', async (req, res) => {
     try {
+        console.log('Received request:', req.body); // Debug log
         const { location, price, size, amenities } = req.body;
         if (!location || !price || !size) {
             return res.status(400).json({ error: 'Location, price, and size are required' });
         }
 
-        const marketplaceUrl = generateMarketplaceUrl({ location, price, size, amenities });
+        const marketplaceUrl = await generateMarketplaceUrl({ location, price, size, amenities });
+        console.log('Generated URL:', marketplaceUrl); // Debug log
         res.json({ url: marketplaceUrl });
     } catch (error) {
+        console.error('Error in /api/predict:', error);
         res.status(500).json({ error: 'Server error' });
     }
 });
