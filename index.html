@@ -19,15 +19,15 @@
                 <input type="number" id="price" min="0" step="1" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 1200" required>
             </div>
             <div>
-                <label for="size" class="block text-sm font-medium text-gray-700">Size (sq ft)</label>
-                <input type="number" id="size" min="0" step="1" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 500" required>
+                <label for="size" class="block text-sm font-medium text-gray-700">Size (sq ft, optional)</label>
+                <input type="number" id="size" min="0" step="1" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 500">
             </div>
             <div>
                 <label for="amenities" class="block text-sm font-medium text-gray-700">Amenities</label>
                 <textarea id="amenities" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Wi-Fi, Parking, Gym" rows="4"></textarea>
             </div>
             <button onclick="addRoom()" class="w-full bg-blue-600 text-white p-2 rounded-md hover:bg-blue-700 transition">Add Room</button>
-            <button onclick="searchRooms()" class="w-full bg-green-600 text-white p-2 rounded-md hover:bg-green-700 transition mt-2">Search on Marketplace</button>
+            <button onclick="searchRooms()" class="w-full bg-green-600 text-white p-2 rounded-md hover:bg-green-700 transition mt-2">Search on Kijiji</button>
         </div>
     </div>
     <div id="roomList" class="w-full max-w-lg mt-6 space-y-4"></div>
@@ -39,8 +39,8 @@
             const size = document.getElementById('size').value;
             const amenities = document.getElementById('amenities').value;
 
-            if (!location || !price || !size) {
-                alert('Please fill in all required fields (Location, Price, Size).');
+            if (!location || !price) {
+                alert('Please fill in all required fields (Location, Price).');
                 return;
             }
 
@@ -49,7 +49,7 @@
             roomCard.innerHTML = `
                 <h2 class="text-lg font-semibold">${location}</h2>
                 <p class="text-gray-600">Price: $${parseInt(price).toLocaleString()}/month</p>
-                <p class="text-gray-600">Size: ${parseInt(size).toLocaleString()} sq ft</p>
+                ${size ? `<p class="text-gray-600">Size: ${parseInt(size).toLocaleString()} sq ft</p>` : ''}
                 ${amenities ? `<p class="text-gray-600">Amenities: ${amenities}</p>` : ''}
             `;
 
@@ -68,8 +68,8 @@
             const size = document.getElementById('size').value;
             const amenities = document.getElementById('amenities').value;
 
-            if (!location || !price || !size) {
-                alert('Please fill in all required fields (Location, Price, Size).');
+            if (!location || !price) {
+                alert('Please fill in all required fields (Location, Price).');
                 return;
             }
 
@@ -79,13 +79,13 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ location, price, size, amenities })
                 });
-                if (!response.ok) throw new Error('Failed to generate Marketplace URL');
+                if (!response.ok) throw new Error('Failed to generate Kijiji URL');
                 const { url } = await response.json();
 
-                // Redirect to Marketplace
+                // Redirect to Kijiji
                 window.location.href = url;
             } catch (error) {
-                alert('Error searching Marketplace: ' + error.message);
+                alert('Error searching Kijiji: ' + error.message);
             }
         }
     </script>
