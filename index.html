@@ -3,70 +3,165 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Room Finder</title>
+    <title>Room Finder - Find Your Perfect Space</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        .room-card {
+            transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+        }
+        .room-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+        }
+    </style>
 </head>
-<body class="bg-gray-100 flex flex-col items-center min-h-screen p-4">
-    <div class="w-full max-w-lg bg-white rounded-lg shadow-lg p-6">
-        <h1 class="text-2xl font-bold text-center mb-6">Room Finder</h1>
-        <div class="space-y-4">
-            <div>
-                <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
-                <input type="text" id="location" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Seattle, WA" required>
+<body class="bg-gray-50 flex flex-col min-h-screen">
+    <!-- Header -->
+    <header class="sticky top-0 bg-white shadow-md z-10">
+        <nav class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
+            <div class="flex items-center space-x-6">
+                <div class="text-2xl font-bold text-blue-600">Room Finder</div>
+                <a href="#home" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
+                <a href="#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
+                <a href="#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
             </div>
-            <div>
-                <label for="price" class="block text-sm font-medium text-gray-700">Price ($/month)</label>
-                <input type="number" id="price" min="0" step="1" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 1200" required>
-            </div>
-            <div>
-                <label for="size" class="block text-sm font-medium text-gray-700">Size (sq ft)</label>
-                <input type="number" id="size" min="0" step="1" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., 500" required>
-            </div>
-            <div>
-                <label for="amenities" class="block text-sm font-medium text-gray-700">Amenities</label>
-                <textarea id="amenities" class="mt-1 w-full p-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="e.g., Wi-Fi, Parking, Gym" rows="4"></textarea>
-            </div>
-            <button onclick="addRoom()" class="w-full bg-blue-600 text-white p-2 rounded-md hover:bg-blue-700 transition">Add Room</button>
-            <button onclick="searchRooms()" class="w-full bg-green-600 text-white p-2 rounded-md hover:bg-green-700 transition mt-2">Search on Marketplace</button>
+        </nav>
+    </header>
+
+    <!-- Hero Section -->
+    <section id="home" class="bg-gradient-to-r from-blue-500 to-blue-700 text-white py-20 text-center">
+        <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8">
+            <h1 class="text-4xl sm:text-5xl font-extrabold mb-4">Find Your Perfect Room</h1>
+            <p class="text-lg sm:text-xl mb-6">Effortlessly browse and save rooms tailored to your needs with Room Finder.</p>
         </div>
-    </div>
-    <div id="roomList" class="w-full max-w-lg mt-6 space-y-4"></div>
+    </section>
+
+    <!-- Main Content -->
+    <main class="flex-grow w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <!-- Room Input Form -->
+        <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
+            <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Add a Room</h2>
+            <div class="space-y-6">
+                <div>
+                    <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
+                    <input type="text" id="location" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., Seattle, WA" required>
+                </div>
+                <div>
+                    <label for="price" class="block text-sm font-medium text-gray-700">Price ($/month)</label>
+                    <input type="number" id="price" min="0" step="1" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 1200" required>
+                </div>
+                <div>
+                    <label for="size" class="block text-sm font-medium text-gray-700">Size (sq ft)</label>
+                    <input type="number" id="size" min="0" step="1" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 500" required>
+                </div>
+                <div>
+                    <label for="bedrooms" class="block text-sm font-medium text-gray-700">Bedrooms (optional)</label>
+                    <input type="number" id="bedrooms" min="0" step="1" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 1">
+                </div>
+                <div>
+                    <label for="amenities" class="block text-sm font-medium text-gray-700">Amenities (optional)</label>
+                    <textarea id="amenities" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., Wi-Fi, Parking, Gym" rows="4"></textarea>
+                </div>
+                <div class="flex space-x-4">
+                    <button onclick="addRoom()" class="flex-1 bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition font-semibold">Add Room</button>
+                    <button onclick="searchRooms()" class="flex-1 bg-green-600 text-white p-3 rounded-lg hover:bg-green-700 transition font-semibold">Search on Marketplace</button>
+                </div>
+            </div>
+        </section>
+
+        <!-- Room List -->
+        <section>
+            <div id="roomList" class="space-y-4"></div>
+        </section>
+    </main>
+
+    <!-- About Section -->
+    <section id="about" class="bg-gray-100 py-12">
+        <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 text-center">About Room Finder</h2>
+            <p class="text-lg text-gray-600">Room Finder is a user-friendly platform designed to help you find and organize rooms that match your preferences. Whether you're looking for a cozy apartment or a spacious office, our tool simplifies the process with an intuitive interface.</p>
+        </div>
+    </section>
+
+    <!-- Contact Section -->
+    <section id="contact" class="bg-white py-12">
+        <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8">
+            <h2 class="text-3xl font-bold text-gray-800 mb-6 text-center">Contact Us</h2>
+            <p class="text-lg text-gray-600 text-center mb-6">Have questions or need assistance? Reach out to our team!</p>
+            <div class="flex justify-center">
+                <a href="mailto:support@roomfinder.com" class="inline-block bg-blue-600 text-white px-8 py-3 rounded-full hover:bg-blue-700 transition font-semibold shadow-md hover:shadow-lg">Email Us</a>
+            </div>
+        </div>
+    </section>
+
+    <!-- Footer -->
+    <footer class="bg-gray-800 text-white py-8">
+        <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 text-center">
+            <p class="text-sm">© 2025 Room Finder. All rights reserved.</p>
+            <div class="mt-4 flex justify-center space-x-4">
+                <a href="#about" class="hover:text-blue-400">About</a>
+                <a href="#contact" class="hover:text-blue-400">Contact</a>
+                <a href="#" class="hover:text-blue-400">Privacy Policy</a>
+            </div>
+        </div>
+    </footer>
 
     <script>
+        let rooms = [];
+
         function addRoom() {
-            const location = document.getElementById('location').value;
+            const location = document.getElementById('location').value.trim();
             const price = document.getElementById('price').value;
             const size = document.getElementById('size').value;
-            const amenities = document.getElementById('amenities').value;
+            const bedrooms = document.getElementById('bedrooms').value;
+            const amenities = document.getElementById('amenities').value.trim();
 
             if (!location || !price || !size) {
                 alert('Please fill in all required fields (Location, Price, Size).');
                 return;
             }
 
-            const roomCard = document.createElement('div');
-            roomCard.className = 'bg-white p-4 rounded-lg shadow-md';
-            roomCard.innerHTML = `
-                <h2 class="text-lg font-semibold">${location}</h2>
-                <p class="text-gray-600">Price: $${parseInt(price).toLocaleString()}/month</p>
-                <p class="text-gray-600">Size: ${parseInt(size).toLocaleString()} sq ft</p>
-                ${amenities ? `<p class="text-gray-600">Amenities: ${amenities}</p>` : ''}
-            `;
-
-            const roomList = document.getElementById('roomList');
-            roomList.prepend(roomCard);
+            const room = { 
+                location, 
+                price: parseInt(price), 
+                size: parseInt(size), 
+                bedrooms: bedrooms ? parseInt(bedrooms) : null, 
+                amenities 
+            };
+            rooms.push(room);
+            renderRooms();
 
             document.getElementById('location').value = '';
             document.getElementById('price').value = '';
             document.getElementById('size').value = '';
+            document.getElementById('bedrooms').value = '';
             document.getElementById('amenities').value = '';
         }
 
+        function renderRooms() {
+            const roomList = document.getElementById('roomList');
+            roomList.innerHTML = '';
+
+            rooms.forEach(room => {
+                const roomCard = document.createElement('div');
+                roomCard.className = 'room-card bg-white p-6 rounded-lg shadow-md';
+                roomCard.innerHTML = `
+                    <h2 class="text-xl font-semibold text-gray-800">${room.location}</h2>
+                    <p class="text-gray-600">Price: $${room.price.toLocaleString()}/month</p>
+                    <p class="text-gray-600">Size: ${room.size.toLocaleString()} sq ft</p>
+                    ${room.bedrooms ? `<p class="text-gray-600">Bedrooms: ${room.bedrooms}</p>` : ''}
+                    ${room.amenities ? `<p class="text-gray-600">Amenities: ${room.amenities}</p>` : ''}
+                `;
+                roomList.appendChild(roomCard);
+            });
+        }
+
         async function searchRooms() {
-            const location = document.getElementById('location').value;
+            const location = document.getElementById('location').value.trim();
             const price = document.getElementById('price').value;
             const size = document.getElementById('size').value;
-            const amenities = document.getElementById('amenities').value;
+            const bedrooms = document.getElementById('bedrooms').value;
+            const amenities = document.getElementById('amenities').value.trim();
 
             if (!location || !price || !size) {
                 alert('Please fill in all required fields (Location, Price, Size).');
@@ -77,15 +172,22 @@
                 const response = await fetch('http://localhost:3000/api/predict', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ location, price, size, amenities })
+                    body: JSON.stringify({ 
+                        location, 
+                        price, 
+                        size, 
+                        bedrooms: bedrooms ? parseInt(bedrooms) : null, 
+                        amenities 
+                    })
                 });
-                if (!response.ok) throw new Error('Failed to generate Marketplace URL');
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || 'Failed to generate Marketplace URL');
+                }
                 const { url } = await response.json();
-
-                // Redirect to Marketplace
                 window.location.href = url;
             } catch (error) {
-                alert('Error searching Marketplace: ' + error.message);
+                alert(`Error searching Marketplace: ${error.message}`);
             }
         }
     </script>

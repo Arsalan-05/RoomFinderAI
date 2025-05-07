@@ -12,22 +12,7 @@ app.use(express.json());
 const GOOGLE_API_KEY = 'AIzaSyBzE8cPfeO5YkmpJFc8SLtVsz_eGB-wYYM'; // Replace with your API key from https://console.cloud.google.com/
 
 // Override map for problematic North American cities
-const locationOverrides = {
-    'los angeles': 'la',
-    'los angeles, ca': 'la',
-    'new york': 'nyc',
-    'new york, ny': 'nyc',
-    'saint john': 'saint-john',
-    'saint john, nb': 'saint-john',
-    'mexico city': 'mexico-city',
-    'mexico city, mexico': 'mexico-city',
-    'saint louis': 'stlouis',
-    'saint louis, mo': 'stlouis',
-    'quebec city': 'quebec',
-    'quebec city, qc': 'quebec',
-    'washington': 'dc',
-    'washington, dc': 'dc'
-};
+
 
 // Helper function to normalize city name to Marketplace slug
 function normalizeCityToSlug(city) {
@@ -110,3 +95,6 @@ app.post('/api/predict', async (req, res) => {
 app.listen(port, () => {
     console.log(`Server running at http://localhost:${port}`);
 });
+
+
+// AIzaSyBzE8cPfeO5YkmpJFc8SLtVsz_eGB-wYYM // Google Cloud API Key
