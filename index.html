@@ -82,7 +82,7 @@
                 </div>
                 <div class="flex space-x-4">
                     <button onclick="addRoom()" class="flex-1 bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition font-semibold">Add Room</button>
-                    <button onclick="searchRooms()" class="flex-1 bg-green-600 text-white p-3 rounded-lg hover:bg-green-700 transition font-semibold">Search on Marketplace</button>
+                    <button onclick="searchRooms()" class="flex-1 bg-green-600 text-white p-3 rounded-lg hover:bg-green-700 transition font-semibold">Search All Sites</button>
                 </div>
             </div>
         </section>
@@ -123,8 +123,7 @@
                 <a href="ai-negotiator.html" class="hover:text-blue-400">AI Negotiator</a>
                 <a href="#contact" class="hover:text-blue-400">Contact</a>
             </div>
-        </div>
-    </footer>
+        </footer>
 
     <!-- AI Chatbot -->
     <div class="fixed bottom-4 right-4 z-50">
@@ -214,27 +213,57 @@
                 return;
             }
 
+            const requestBody = { location, roomType, price, size: size ? parseInt(size) : null, bedrooms: bedrooms ? parseInt(bedrooms) : null, amenities };
+            let kijijiUrl = '', marketplaceUrl = '';
+
             try {
-                const response = await fetch('http://localhost:3000/api/predict', {
+                // Fetch Kijiji URL
+                const kijijiResponse = await fetch('http://localhost:3000/api/predict/kijiji', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ 
-                        location, 
-                        roomType,
-                        price, 
-                        size: size ? parseInt(size) : null, 
-                        bedrooms: bedrooms ? parseInt(bedrooms) : null, 
-                        amenities 
-                    })
+                    body: JSON.stringify(requestBody)
                 });
-                if (!response.ok) {
-                    const errorData = await response.json();
-                    throw new Error(errorData.error || 'Failed to generate Marketplace URL');
+                if (kijijiResponse.ok) {
+                    const { url } = await kijijiResponse.json();
+                    kijijiUrl = url;
+                } else {
+                    const errorData = await kijijiResponse.json();
+                    console.warn(`Kijiji fetch failed: ${errorData.error || 'Unknown error'}`);
                 }
-                const { url } = await response.json();
-                window.location.href = url;
+                console.log('Kijiji URL:', kijijiUrl);
+
+                // Fetch Facebook Marketplace URL
+                const marketplaceResponse = await fetch('http://localhost:3000/api/predict/marketplace', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(requestBody)
+                });
+                if (marketplaceResponse.ok) {
+                    const { url } = await marketplaceResponse.json();
+                    marketplaceUrl = url;
+                } else {
+                    const errorData = await marketplaceResponse.json();
+                    console.warn(`Marketplace fetch failed: ${errorData.error || 'Unknown error'}`);
+                }
+                console.log('Marketplace URL:', marketplaceUrl);
+
+                // Open available URLs in new tabs
+                if (kijijiUrl) window.open(kijijiUrl, '_blank');
+                if (marketplaceUrl) window.open(marketplaceUrl, '_blank');
+                if (!kijijiUrl && !marketplaceUrl) {
+                    throw new Error('Failed to generate URLs for both Kijiji and Marketplace');
+                }
+
+                // Clear form
+                document.getElementById('location').value = '';
+                document.getElementById('roomType').value = '';
+                document.getElementById('price').value = '';
+                document.getElementById('size').value = '';
+                document.getElementById('bedrooms').value = '';
+                document.getElementById('amenities').value = '';
             } catch (error) {
-                alert(`Error searching Marketplace: ${error.message}`);
+                alert(`Error searching: ${error.message}`);
+                console.error('Search error:', error);
             }
         }
 
