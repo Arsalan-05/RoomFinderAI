@@ -1,8 +1,6 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-require('dotenv').config();
-
 const app = express();
 const port = 3000;
 
@@ -10,132 +8,157 @@ const port = 3000;
 app.use(cors());
 app.use(express.json());
 
-// Helper function to get normalized location using Google Geocoding API
-async function getNormalizedLocation(location) {
-    const apiKey = process.env.GOOGLE_API_KEY;
-    if (!apiKey) {
-        throw new Error('Google API key is not configured');
-    }
+// Google Maps API key
+const GOOGLE_API_KEY = 'AIzaSyBzE8cPfeO5YkmpJFc8SLtVsz_eGB-wYYM'; // Ensure this is your valid key
 
-    const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(location)}&key=${apiKey}`;
-    
+
+// Helper function to normalize city name to Marketplace slug
+function normalizeCityToSlug(city) {
+    if (!city) return '';
+    const lowerCity = city.toLowerCase();
+    return locationOverrides[lowerCity] || lowerCity
+        .replace(/[^a-z0-9\s]/g, '') // Remove special characters
+        .replace(/\s+/g, ''); // Remove spaces
+}
+
+// Helper function to get city slug via Google Maps Geocoding API
+async function getCitySlug(location) {
     try {
-        const response = await axios.get(url);
-        const { results, status } = response.data;
-
-        console.log(`Geocoding response for "${location}":`, { status, results: results.length });
-
-        if (status !== 'OK' || results.length === 0) {
-            throw new Error('Unable to geocode location');
+        const response = await axios.get(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(location)}&components=country:CA&key=${GOOGLE_API_KEY}`
+        );
+        if (response.data.status !== 'OK') {
+            throw new Error(`Geocoding API error: ${response.data.status}`);
         }
-
-        // Extract city and state for Marketplace
-        const addressComponents = results[0].address_components;
-        let city = '';
-        let state = '';
-
-        for (const component of addressComponents) {
-            if (component.types.includes('locality')) {
-                city = component.short_name;
-            }
-            if (component.types.includes('administrative_area_level_1')) {
-                state = component.short_name;
-            }
-        }
-
-        // Fallback to state if city is not found
-        if (!city && state) {
-            city = state;
-        }
-
-        if (!city) {
-            throw new Error('Could not determine city or region from location');
-        }
-
-        // Normalize for Facebook Marketplace (e.g., "New York, NY" -> "new-york-ny")
-        const normalized = `${city.toLowerCase()}${state ? '-' + state.toLowerCase() : ''}`.replace(/\s+/g, '-');
-        console.log(`Normalized location for "${location}": ${normalized}`);
-        return normalized;
+        const cityComponent = response.data.results[0]?.address_components.find(c => c.types.includes('locality'));
+        const city = cityComponent ? cityComponent.short_name : null;
+        const slug = city ? normalizeCityToSlug(city) : '';
+        console.log(`Geocoded location: ${location} -> City: ${city || 'none'}, Slug: ${slug || 'none'}`);
+        return slug;
     } catch (error) {
-        console.error(`Geocoding error for "${location}":`, error.message);
-        throw new Error(`Geocoding error: ${error.message}`);
+        console.error('Geocoding error:', error.message);
+        return ''; // Fallback to locationless URL
     }
 }
 
-// Helper function to predict and generate Marketplace URL
-function generateMarketplaceUrl({ normalizedLocation, price, size, amenities, bedrooms = null, radius = 10 }) {
-    // Normalize inputs
-    const priceNum = parseInt(price);
-    const sizeNum = parseInt(size);
+// Helper function to normalize city and province for Kijiji URL
+function normalizeForKijiji(city, province) {
+    if (!city) return { normalizedCity: '', normalizedProvince: '' };
+    const normalizedCity = city.toLowerCase().replace(/[^a-z0-9]/g, '');
+    const normalizedProvince = province ? province.toLowerCase().replace(/[^a-z0-9]/g, '') : '';
+    return { normalizedCity, normalizedProvince };
+}
 
-    // Predict price range (±10% of input price)
+// Helper function to get city and province for Kijiji
+async function getCityDetails(location) {
+    try {
+        const response = await axios.get(
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(location)}&components=country:CA&key=${GOOGLE_API_KEY}`
+        );
+        if (response.data.status !== 'OK') {
+            throw new Error(`Geocoding API error: ${response.data.status}`);
+        }
+        const cityComponent = response.data.results[0]?.address_components.find(c => c.types.includes('locality'));
+        const provinceComponent = response.data.results[0]?.address_components.find(c => c.types.includes('administrative_area_level_1'));
+        const city = cityComponent ? cityComponent.short_name : null;
+        const province = provinceComponent ? provinceComponent.short_name : null;
+        const { normalizedCity, normalizedProvince } = normalizeForKijiji(city, province);
+        console.log(`Geocoded: ${location} -> City: ${city || 'none'}, Normalized: ${normalizedCity || 'none'}, Province: ${province || 'none'}, Normalized Province: ${normalizedProvince || 'none'}`);
+        return { city: normalizedCity, province: normalizedProvince };
+    } catch (error) {
+        console.error('Geocoding error:', error.message);
+        return { city: '', province: '' };
+    }
+}
+
+// Helper function to generate Kijiji search URL
+async function generateKijijiUrl({ location, price, size, amenities }) {
+    const { city, province } = await getCityDetails(location);
+    const priceNum = parseInt(price);
+    const sizeNum = size ? parseInt(size) : null;
+
     const minPrice = Math.floor(priceNum * 0.9);
     const maxPrice = Math.ceil(priceNum * 1.1);
 
-    // Map amenities to Marketplace keywords
-    const amenityMap = {
-        'wi-fi': 'wifi',
-        'parking': 'parking',
-        'gym': 'gym',
-        'pool': 'pool',
-        'laundry': 'washer-dryer'
-    };
-    let amenityKeywords = '';
-    if (amenities) {
-        const amenitiesArray = amenities.split(',').map(a => a.trim().toLowerCase());
-        amenityKeywords = amenitiesArray
-            .map(a => amenityMap[a] || a)
-            .map(encodeURIComponent)
-            .join('%20');
-    }
+    const amenityKeywords = amenities
+        ? amenities.split(',').map(a => a.trim().replace(/\s+/g, '-')).join('-')
+        : '';
 
-    // Construct query
     let query = 'apartment';
-    if (amenityKeywords) query += `%20${amenityKeywords}`;
-    if (sizeNum) query += `%20${sizeNum}sqft`;
+    if (amenityKeywords) query += `-${amenityKeywords}`;
+    if (sizeNum) query += `-${sizeNum}-sq-ft`;
 
-    // Facebook Marketplace base URL
-    const baseUrl = 'https://www.facebook.com/marketplace';
-    let searchUrl = `${baseUrl}/${normalizedLocation}/search`;
-
-    // Add query parameters
-    const params = new URLSearchParams();
-    params.append('minPrice', minPrice);
-    params.append('maxPrice', maxPrice);
-    params.append('query', query);
-    params.append('radiusMiles', radius);
-    params.append('propertyType', 'apartment_condo');
-    if (bedrooms) params.append('bedrooms', bedrooms);
-
-    searchUrl += `?${params.toString()}`;
-    console.log(`Generated Marketplace URL: ${searchUrl}`);
-    return searchUrl;
+    const baseUrl = 'https://www.kijiji.ca/b-apartments-condos';
+    const encodedQuery = encodeURIComponent(query);
+    const addressParam = encodeURIComponent(location);
+    return `${baseUrl}/${encodedQuery}/k0c37?price=${minPrice}__${maxPrice}&address=${addressParam}`;
 }
 
-// API Endpoint to predict and generate URL
-app.post('/api/predict', async (req, res) => {
+// Helper function to generate Facebook Marketplace URL
+async function generateMarketplaceUrl({ location, price, size, amenities }) {
+    const normalizedLocation = await getCitySlug(location);
+    console.log(`Input location: ${location}, Normalized: ${normalizedLocation || 'none'}`);
+
+    const encodedLocation = encodeURIComponent(normalizedLocation);
+    const priceNum = parseInt(price);
+    const sizeNum = size ? parseInt(size) : null;
+
+    const minPrice = Math.floor(priceNum * 0.9);
+    const maxPrice = Math.ceil(priceNum * 1.1);
+
+    const amenityKeywords = amenities
+        ? amenities.split(',').map(a => encodeURIComponent(a.trim())).join('%20')
+        : '';
+
+    let query = 'apartment';
+    if (amenityKeywords) query += `%20${amenityKeywords}`;
+    if (sizeNum) query += `%20${sizeNum}%20sq%20ft`;
+    if (!normalizedLocation) query += `%20${encodeURIComponent(location)}`;
+
+    const baseUrl = 'https://www.facebook.com/marketplace';
+    const locationPath = normalizedLocation ? `/${encodedLocation}` : '';
+    return `${baseUrl}${locationPath}/search?minPrice=${minPrice}&maxPrice=${maxPrice}&query=${query}`;
+}
+
+// API Endpoint for Kijiji URL
+app.post('/api/predict/kijiji', async (req, res) => {
     try {
-        const { location, price, size, amenities, bedrooms } = req.body;
-        if (!location || !price || !size) {
-            return res.status(400).json({ error: 'Location, price, and size are required' });
+        console.log('Received Kijiji request:', req.body);
+        const { location, price, size, amenities } = req.body;
+        if (!location || !price) {
+            return res.status(400).json({ error: 'Location and price are required' });
         }
 
-        // Get normalized location using Google Geocoding API
-        const normalizedLocation = await getNormalizedLocation(location);
+        const kijijiUrl = await generateKijijiUrl({ location, price, size, amenities });
+        if (!kijijiUrl) {
+            throw new Error('Failed to generate Kijiji URL');
+        }
+        console.log('Generated Kijiji URL:', kijijiUrl);
+        res.json({ url: kijijiUrl });
+    } catch (error) {
+        console.error('Error in /api/predict/kijiji:', error.message);
+        res.status(500).json({ error: `Failed to generate Kijiji URL: ${error.message}` });
+    }
+});
 
-        // Generate Marketplace URL with filters
-        const marketplaceUrl = generateMarketplaceUrl({ 
-            normalizedLocation, 
-            price, 
-            size, 
-            amenities, 
-            bedrooms,
-            radius: 10
-        });
+// API Endpoint for Facebook Marketplace URL
+app.post('/api/predict/marketplace', async (req, res) => {
+    try {
+        console.log('Received Marketplace request:', req.body);
+        const { location, price, size, amenities } = req.body;
+        if (!location || !price) {
+            return res.status(400).json({ error: 'Location and price are required' });
+        }
 
+        const marketplaceUrl = await generateMarketplaceUrl({ location, price, size, amenities });
+        if (!marketplaceUrl) {
+            throw new Error('Failed to generate Marketplace URL');
+        }
+        console.log('Generated Marketplace URL:', marketplaceUrl);
         res.json({ url: marketplaceUrl });
     } catch (error) {
-        res.status(500).json({ error: error.message });
+        console.error('Error in /api/predict/marketplace:', error.message);
+        res.status(500).json({ error: `Failed to generate Marketplace URL: ${error.message}` });
     }
 });
 
