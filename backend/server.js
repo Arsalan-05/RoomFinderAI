@@ -11,12 +11,22 @@ app.use(express.json());
 // Google Maps API key
 const GOOGLE_API_KEY = 'AIzaSyBzE8cPfeO5YkmpJFc8SLtVsz_eGB-wYYM'; // Replace with your valid key
 
-// Override map for problematic Canadian cities
+// Override map for problematic North American cities
 const locationOverrides = {
+    'los angeles': 'la',
+    'los angeles, ca': 'la',
+    'new york': 'nyc',
+    'new york, ny': 'nyc',
     'saint john': 'saint-john',
     'saint john, nb': 'saint-john',
+    'mexico city': 'mexico-city',
+    'mexico city, mexico': 'mexico-city',
+    'saint louis': 'stlouis',
+    'saint louis, mo': 'stlouis',
     'quebec city': 'quebec',
     'quebec city, qc': 'quebec',
+    'washington': 'dc',
+    'washington, dc': 'dc',
     'st johns': 'st-johns',
     'st johns, nl': 'st-johns',
     'st catharines': 'st-catharines',
@@ -38,7 +48,7 @@ function normalizeCityToSlug(city) {
 async function getCitySlug(location) {
     try {
         const response = await axios.get(
-            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(location)}&components=country:CA&key=${GOOGLE_API_KEY}`
+            `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(location)}&components=continent:North%20America&key=${GOOGLE_API_KEY}`
         );
         if (response.data.status !== 'OK') {
             throw new Error(`Geocoding API error: ${response.data.status}`);
@@ -50,7 +60,6 @@ async function getCitySlug(location) {
         return slug;
     } catch (error) {
         console.error('Geocoding error in getCitySlug:', error.message);
-        // Fallback to raw location if geocoding fails
         return location.toLowerCase().replace(/[^a-z0-9]/g, '');
     }
 }
@@ -63,7 +72,7 @@ function normalizeForKijiji(city, province) {
     return { normalizedCity, normalizedProvince };
 }
 
-// Helper function to get city and province for Kijiji
+// Helper function to get city and province for Kijiji (Canada only)
 async function getCityDetails(location) {
     try {
         const response = await axios.get(
@@ -81,7 +90,7 @@ async function getCityDetails(location) {
         return { city: normalizedCity, province: normalizedProvince };
     } catch (error) {
         console.error('Geocoding error in getCityDetails:', error.message);
-        return { city: location.toLowerCase().replace(/[^a-z0-9]/g, ''), province: '' };
+        return { city: '', province: '' }; // Kijiji will fall back to Canada-wide search
     }
 }
 
@@ -104,7 +113,11 @@ async function generateKijijiUrl({ location, price, size, amenities, roomType })
     const baseUrl = 'https://www.kijiji.ca/b-apartments-condos';
     const encodedQuery = encodeURIComponent(query);
     const addressParam = encodeURIComponent(location);
-    const kijijiUrl = `${baseUrl}/${encodedQuery}/k0c37?price=${minPrice}__${maxPrice}&address=${addressParam}`;
+    let locationPath = '';
+    if (city && province) {
+        locationPath = `/${city}-${province}`;
+    }
+    const kijijiUrl = `${baseUrl}${locationPath}/${encodedQuery}/k0c37?price=${minPrice}__${maxPrice}&address=${addressParam}`;
     console.log(`Generated Kijiji URL: ${kijijiUrl}`);
     return kijijiUrl;
 }
