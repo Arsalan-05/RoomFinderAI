@@ -13,6 +13,12 @@
             transform: translateY(-4px);
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
+        #chatbotPopup {
+            transition: transform 0.3s ease-in-out;
+        }
+        #chatbotPopup.hidden {
+            transform: translateY(100%);
+        }
     </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
@@ -21,8 +27,10 @@
         <nav class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-6">
                 <div class="text-2xl font-bold text-blue-600">Room Finder</div>
-                <a href="#home" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
+                <a href="index.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
                 <a href="#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
+                <a href="sublease.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
+                <a href="ai-negotiator.html" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
                 <a href="#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
             </div>
         </nav>
@@ -47,12 +55,22 @@
                     <input type="text" id="location" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., Seattle, WA" required>
                 </div>
                 <div>
+                    <label for="roomType" class="block text-sm font-medium text-gray-700">Room Type</label>
+                    <select id="roomType" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" required>
+                        <option value="" disabled selected>Select a room type</option>
+                        <option value="House">House</option>
+                        <option value="Apartment">Apartment</option>
+                        <option value="Condo">Condo</option>
+                        <option value="Townhouse">Townhouse</option>
+                    </select>
+                </div>
+                <div>
                     <label for="price" class="block text-sm font-medium text-gray-700">Price ($/month)</label>
                     <input type="number" id="price" min="0" step="1" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 1200" required>
                 </div>
                 <div>
-                    <label for="size" class="block text-sm font-medium text-gray-700">Size (sq ft)</label>
-                    <input type="number" id="size" min="0" step="1" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 500" required>
+                    <label for="size" class="block text-sm font-medium text-gray-700">Size (sq ft, optional)</label>
+                    <input type="number" id="size" min="0" step="1" class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 500">
                 </div>
                 <div>
                     <label for="bedrooms" class="block text-sm font-medium text-gray-700">Bedrooms (optional)</label>
@@ -99,32 +117,57 @@
         <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <p class="text-sm">© 2025 Room Finder. All rights reserved.</p>
             <div class="mt-4 flex justify-center space-x-4">
+                <a href="index.html" class="hover:text-blue-400">Home</a>
                 <a href="#about" class="hover:text-blue-400">About</a>
+                <a href="sublease.html" class="hover:text-blue-400">Sublease</a>
+                <a href="ai-negotiator.html" class="hover:text-blue-400">AI Negotiator</a>
                 <a href="#contact" class="hover:text-blue-400">Contact</a>
-                <a href="#" class="hover:text-blue-400">Privacy Policy</a>
             </div>
         </div>
     </footer>
+
+    <!-- AI Chatbot -->
+    <div class="fixed bottom-4 right-4 z-50">
+        <button id="chatbotToggle" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-4-4v8"></path>
+            </svg>
+        </button>
+        <div id="chatbotPopup" class="hidden fixed bottom-20 right-4 w-80 bg-white rounded-lg shadow-xl border border-gray-200">
+            <div class="bg-blue-600 text-white p-4 rounded-t-lg">
+                <h3 class="text-lg font-semibold">Room Finder AI Assistant</h3>
+            </div>
+            <div id="chatMessages" class="p-4 h-64 overflow-y-auto">
+                <p class="text-gray-600">Hello! How can I assist you with your room search?</p>
+            </div>
+            <div class="p-4 border-t border-gray-200">
+                <input id="chatInput" type="text" class="w-full p-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
+                <button onclick="sendChatMessage()" class="mt-2 w-full bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition">Send</button>
+            </div>
+        </div>
+    </div>
 
     <script>
         let rooms = [];
 
         function addRoom() {
             const location = document.getElementById('location').value.trim();
+            const roomType = document.getElementById('roomType').value;
             const price = document.getElementById('price').value;
             const size = document.getElementById('size').value;
             const bedrooms = document.getElementById('bedrooms').value;
             const amenities = document.getElementById('amenities').value.trim();
 
-            if (!location || !price || !size) {
-                alert('Please fill in all required fields (Location, Price, Size).');
+            if (!location || !roomType || !price) {
+                alert('Please fill in all required fields (Location, Room Type, Price).');
                 return;
             }
 
             const room = { 
                 location, 
+                roomType,
                 price: parseInt(price), 
-                size: parseInt(size), 
+                size: size ? parseInt(size) : null, 
                 bedrooms: bedrooms ? parseInt(bedrooms) : null, 
                 amenities 
             };
@@ -132,6 +175,7 @@
             renderRooms();
 
             document.getElementById('location').value = '';
+            document.getElementById('roomType').value = '';
             document.getElementById('price').value = '';
             document.getElementById('size').value = '';
             document.getElementById('bedrooms').value = '';
@@ -147,8 +191,9 @@
                 roomCard.className = 'room-card bg-white p-6 rounded-lg shadow-md';
                 roomCard.innerHTML = `
                     <h2 class="text-xl font-semibold text-gray-800">${room.location}</h2>
+                    <p class="text-gray-600">Type: ${room.roomType}</p>
                     <p class="text-gray-600">Price: $${room.price.toLocaleString()}/month</p>
-                    <p class="text-gray-600">Size: ${room.size.toLocaleString()} sq ft</p>
+                    ${room.size ? `<p class="text-gray-600">Size: ${room.size.toLocaleString()} sq ft</p>` : ''}
                     ${room.bedrooms ? `<p class="text-gray-600">Bedrooms: ${room.bedrooms}</p>` : ''}
                     ${room.amenities ? `<p class="text-gray-600">Amenities: ${room.amenities}</p>` : ''}
                 `;
@@ -158,13 +203,14 @@
 
         async function searchRooms() {
             const location = document.getElementById('location').value.trim();
+            const roomType = document.getElementById('roomType').value;
             const price = document.getElementById('price').value;
             const size = document.getElementById('size').value;
             const bedrooms = document.getElementById('bedrooms').value;
             const amenities = document.getElementById('amenities').value.trim();
 
-            if (!location || !price || !size) {
-                alert('Please fill in all required fields (Location, Price, Size).');
+            if (!location || !roomType || !price) {
+                alert('Please fill in all required fields (Location, Room Type, Price).');
                 return;
             }
 
@@ -174,8 +220,9 @@
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ 
                         location, 
+                        roomType,
                         price, 
-                        size, 
+                        size: size ? parseInt(size) : null, 
                         bedrooms: bedrooms ? parseInt(bedrooms) : null, 
                         amenities 
                     })
@@ -190,6 +237,44 @@
                 alert(`Error searching Marketplace: ${error.message}`);
             }
         }
+
+        // Chatbot functionality
+        document.getElementById('chatbotToggle').addEventListener('click', () => {
+            const popup = document.getElementById('chatbotPopup');
+            popup.classList.toggle('hidden');
+        });
+
+        function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            const messages = document.getElementById('chatMessages');
+            // Append user message
+            const userMessage = document.createElement('p');
+            userMessage.className = 'text-right text-blue-600 mt-2';
+            userMessage.textContent = `You: ${message}`;
+            messages.appendChild(userMessage);
+
+            // Simulate AI response
+            const aiMessage = document.createElement('p');
+            aiMessage.className = 'text-left text-gray-600 mt-2';
+            aiMessage.textContent = `AI: I'm here to help! For "${message}", try checking our Sublease page or use the AI Negotiator for pricing tips.`;
+            messages.appendChild(aiMessage);
+
+            // Scroll to bottom
+            messages.scrollTop = messages.scrollHeight;
+
+            // Clear input
+            input.value = '';
+        }
+
+        // Allow sending message with Enter key
+        document.getElementById('chatInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendChatMessage();
+            }
+        });
     </script>
 </body>
 </html>
