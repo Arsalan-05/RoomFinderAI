@@ -1,49 +1,18 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Room Finder - AI Negotiator</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        #chatbotPopup {
+            transition: transform 0.3s ease-in-out;
+        }
+        #chatbotPopup.hidden {
+            transform: translateY(100%);
+        }
+    </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
     <!-- Header -->
@@ -85,5 +54,66 @@
             </div>
         </div>
     </footer>
+
+    <!-- AI Chatbot -->
+    <div class="fixed bottom-4 right-4 z-50">
+        <button id="chatbotToggle" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-4-4v8"></path>
+            </svg>
+        </button>
+        <div id="chatbotPopup" class="hidden fixed bottom-20 right-4 w-80 bg-white rounded-lg shadow-xl border border-gray-200">
+            <div class="bg-blue-600 text-white p-4 rounded-t-lg">
+                <h3 class="text-lg font-semibold">Room Finder AI Assistant</h3>
+            </div>
+            <div id="chatMessages" class="p-4 h-64 overflow-y-auto">
+                <p class="text-gray-600">Hello! How can I assist you with negotiations?</p>
+            </div>
+            <div class="p-4 border-t border-gray-200">
+                <input id="chatInput" type="text" class="w-full p-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
+                <button onclick="sendChatMessage()" class="mt-2 w-full bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Chatbot functionality
+        document.getElementById('chatbotToggle').addEventListener('click', () => {
+            const popup = document.getElementById('chatbotPopup');
+            popup.classList.toggle('hidden');
+        });
+
+        function sendChatMessage() {
+            const input = document.getElementById('chatInput');
+            const message = input.value.trim();
+            if (!message) return;
+
+            const messages = document.getElementById('chatMessages');
+            // Append user message
+            const userMessage = document.createElement('p');
+            userMessage.className = 'text-right text-blue-600 mt-2';
+            userMessage.textContent = `You: ${message}`;
+            messages.appendChild(userMessage);
+
+            // Simulate AI response
+            const aiMessage = document.createElement('p');
+            aiMessage.className = 'text-left text-gray-600 mt-2';
+            aiMessage.textContent = `AI: I'm here to help! For "${message}", try using our AI Negotiator for pricing suggestions or check the Sublease page for listing options.`;
+            messages.appendChild(aiMessage);
+
+            // Scroll to bottom
+            messages.scrollTop = messages.scrollHeight;
+
+            // Clear input
+            input.value = '';
+        }
+
+        // Allow sending message with Enter key
+        document.getElementById('chatInput').addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendChatMessage();
+            }
+        });
+    </script>
 </body>
 </html>
