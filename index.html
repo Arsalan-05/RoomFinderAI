@@ -398,7 +398,7 @@
             messageFriendMode = false;
         }
 
-        async function processFriendMessage(message, isSimulated = false) {
+        async function processFriendMessage(message) {
             messageCount++;
             appendMessage('Friend', message, 'right');
 
@@ -414,15 +414,13 @@
                         const value = moneyEntity.value;
                         const hasRole = moneyEntity.role && moneyEntity.role.length > 0;
                         if (hasRole && moneyEntity.role === 'final_price' || lowerMessage.includes('price') || lowerMessage.includes('final')) {
-                            if (!isSimulated || !userProvided.finalPrice) {
-                                priceHistory.push(value);
-                                if (priceHistory.length > 1 && priceHistory[priceHistory.length - 1] !== priceHistory[priceHistory.length - 2]) {
-                                    appendMessage('AI', `I noticed multiple prices: $${priceHistory.join(' and $')}. Which one is correct?`, 'left');
-                                    return;
-                                }
-                                rentalData.finalPrice = value;
-                                if (!isSimulated) userProvided.finalPrice = true;
+                            priceHistory.push(value);
+                            if (priceHistory.length > 1 && priceHistory[priceHistory.length - 1] !== priceHistory[priceHistory.length - 2]) {
+                                appendMessage('AI', `I noticed multiple prices: $${priceHistory.join(' and $')}. Which one is correct?`, 'left');
+                                return;
                             }
+                            rentalData.finalPrice = value;
+                            userProvided.finalPrice = true;
                         }
                     }
                 }
@@ -432,119 +430,80 @@
                         const value = moneyEntity.value;
                         const hasRole = moneyEntity.role && moneyEntity.role.length > 0;
                         if (hasRole && moneyEntity.role === 'deposit' || lowerMessage.includes('deposit')) {
-                            if (!isSimulated || !userProvided.deposit) {
-                                rentalData.deposit = value;
-                                if (!isSimulated) userProvided.deposit = true;
-                            }
+                            rentalData.deposit = value;
+                            userProvided.deposit = true;
                         } else if (currentQuestionIndex === 3 || lowerMessage.includes('deposit')) {
-                            if (!isSimulated || !userProvided.deposit) {
-                                rentalData.deposit = value;
-                                if (!isSimulated) userProvided.deposit = true;
-                            }
+                            rentalData.deposit = value;
+                            userProvided.deposit = true;
                         }
                     }
                 }
 
                 // house_type:house_type
                 if (entities['house_type:house_type']) {
-                    if (!isSimulated || !userProvided.houseType) {
-                        rentalData.houseType = entities['house_type:house_type'][0].value;
-                        if (!isSimulated) userProvided.houseType = true;
-                    }
+                    rentalData.houseType = entities['house_type:house_type'][0].value;
+                    userProvided.houseType = true;
                 }
 
                 // wit$location:location
                 if (entities['wit$location:location']) {
-                    if (!isSimulated || !userProvided.location) {
-                        const locationEntity = entities['wit$location:location'][0];
-                        rentalData.location = locationEntity.resolved?.values?.[0]?.name || locationEntity.value;
-                        if (!isSimulated) userProvided.location = true;
-                    }
+                    const locationEntity = entities['wit$location:location'][0];
+                    rentalData.location = locationEntity.resolved?.values?.[0]?.name || locationEntity.value;
+                    userProvided.location = true;
                 }
 
                 // yes_no:yes_no (utilities, pets, parking, first/last, contract)
                 if (entities['yes_no:yes_no']) {
                     const yesNo = entities['yes_no:yes_no'][0].value === 'yes';
                     if (lowerMessage.includes('utilities')) {
-                        if (!isSimulated || !userProvided.utilities) {
-                            rentalData.utilities = yesNo;
-                            if (!isSimulated) userProvided.utilities = true;
-                        }
+                        rentalData.utilities = yesNo;
+                        userProvided.utilities = true;
                     } else if (lowerMessage.includes('pets')) {
-                        if (!isSimulated || !userProvided.pets) {
-                            rentalData.pets = yesNo;
-                            if (!isSimulated) userProvided.pets = true;
-                        }
+                        rentalData.pets = yesNo;
+                        userProvided.pets = true;
                     } else if (lowerMessage.includes('parking')) {
-                        if (!isSimulated || !userProvided.parking) {
-                            rentalData.parking = yesNo;
-                            if (!isSimulated) userProvided.parking = true;
-                        }
+                        rentalData.parking = yesNo;
+                        userProvided.parking = true;
                     } else if (lowerMessage.includes('first') || lowerMessage.includes('last')) {
-                        if (!isSimulated || !userProvided.firstLastMonth) {
-                            rentalData.firstLastMonth = yesNo;
-                            if (!isSimulated) userProvided.firstLastMonth = true;
-                        }
+                        rentalData.firstLastMonth = yesNo;
+                        userProvided.firstLastMonth = true;
                     } else if (lowerMessage.includes('contract') || lowerMessage.includes('lease')) {
-                        if (!isSimulated || !userProvided.contract) {
-                            rentalData.contract = yesNo;
-                            if (!isSimulated) userProvided.contract = true;
-                        }
+                        rentalData.contract = yesNo;
+                        userProvided.contract = true;
                     } else {
                         // Infer based on question index if context is unclear
-                        if (currentQuestionIndex === 4 && (!isSimulated || !userProvided.utilities)) {
+                        if (currentQuestionIndex === 4 && !userProvided.utilities) {
                             rentalData.utilities = yesNo;
-                            if (!isSimulated) userProvided.utilities = true;
+                            userProvided.utilities = true;
                         }
-                        else if (currentQuestionIndex === 5 && (!isSimulated || !userProvided.pets)) {
+                        else if (currentQuestionIndex === 5 && !userProvided.pets) {
                             rentalData.pets = yesNo;
-                            if (!isSimulated) userProvided.pets = true;
+                            userProvided.pets = true;
                         }
-                        else if (currentQuestionIndex === 6 && (!isSimulated || !userProvided.parking)) {
+                        else if (currentQuestionIndex === 6 && !userProvided.parking) {
                             rentalData.parking = yesNo;
-                            if (!isSimulated) userProvided.parking = true;
+                            userProvided.parking = true;
                         }
-                        else if (currentQuestionIndex === 7 && (!isSimulated || !userProvided.firstLastMonth)) {
+                        else if (currentQuestionIndex === 7 && !userProvided.firstLastMonth) {
                             rentalData.firstLastMonth = yesNo;
-                            if (!isSimulated) userProvided.firstLastMonth = true;
+                            userProvided.firstLastMonth = true;
                         }
-                        else if (currentQuestionIndex === 8 && (!isSimulated || !userProvided.contract)) {
+                        else if (currentQuestionIndex === 8 && !userProvided.contract) {
                             rentalData.contract = yesNo;
-                            if (!isSimulated) userProvided.contract = true;
+                            userProvided.contract = true;
                         }
                     }
                 }
             }
 
-            // Simulate friend's response (for testing purposes)
-            if (!isSimulated) {
-                setTimeout(async () => {
-                    let friendResponse = '';
-                    if (currentQuestionIndex === 0) friendResponse = 'The final price is $1200 per month.';
-                    else if (currentQuestionIndex === 1) friendResponse = 'It’s an apartment.';
-                    else if (currentQuestionIndex === 2) friendResponse = 'It’s located in Toronto.';
-                    else if (currentQuestionIndex === 3) friendResponse = 'The deposit is $500.';
-                    else if (currentQuestionIndex === 4) friendResponse = 'Yes, utilities are included.';
-                    else if (currentQuestionIndex === 5) friendResponse = 'No, pets are not allowed.';
-                    else if (currentQuestionIndex === 6) friendResponse = 'Yes, parking is available.';
-                    else if (currentQuestionIndex === 7) friendResponse = 'Yes, you need to pay first and last month’s rent.';
-                    else if (currentQuestionIndex === 8) friendResponse = 'Yes, there’s a 1-year lease contract.';
-                    else friendResponse = 'That’s all the info I have!';
-
-                    if (friendResponse) {
-                        await processFriendMessage(friendResponse, true);
-                    }
-                }, 1000);
+            currentQuestionIndex++;
+            if (messageCount >= 9) {
+                summarizeRentalData();
             } else {
-                currentQuestionIndex++;
-                if (messageCount >= 6) {
-                    summarizeRentalData();
-                } else {
-                    if (currentQuestionIndex < questionsToAsk.length) {
-                        appendMessage('AI', questionsToAsk[currentQuestionIndex], 'left');
-                    }
-                    suggestNextQuestion();
+                if (currentQuestionIndex < questionsToAsk.length) {
+                    appendMessage('AI', questionsToAsk[currentQuestionIndex], 'left');
                 }
+                suggestNextQuestion();
             }
         }
 
