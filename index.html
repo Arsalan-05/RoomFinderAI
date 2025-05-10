@@ -27,11 +27,11 @@
         <nav class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-6">
                 <div class="text-2xl font-bold text-blue-600">Room Finder</div>
-                <a href="index.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
-                <a href="#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
-                <a href="sublease.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
-                <a href="ai-negotiator.html" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
-                <a href="#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
+                <a href="/index" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
+                <a href="/index#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
+                <a href="/sublease" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
+                <a href="/ai-negotiator" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
+                <a href="/index#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
             </div>
         </nav>
     </header>
@@ -84,8 +84,9 @@
                     <button onclick="addRoom()" class="flex-1 bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition font-semibold">Add Room</button>
                     <button onclick="searchRooms()" class="flex-1 bg-green-600 text-white p-3 rounded-lg hover:bg-green-700 transition font-semibold">Search All Sites</button>
                 </div>
-                <div>
-                    <button onclick="messageFriend()" class="w-full bg-purple-600 text-white p-3 rounded-lg hover:bg-purple-700 transition font-semibold">Message Friend About Rental</button>
+                <div class="flex space-x-4">
+                    <button onclick="messageFriend()" class="flex-1 bg-purple-600 text-white p-3 rounded-lg hover:bg-purple-700 transition font-semibold">Message Friend About Rental</button>
+                    <button onclick="askAI()" class="flex-1 bg-indigo-600 text-white p-3 rounded-lg hover:bg-indigo-700 transition font-semibold">Ask AI</button>
                 </div>
             </div>
         </section>
@@ -120,13 +121,14 @@
         <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <p class="text-sm">© 2025 Room Finder. All rights reserved.</p>
             <div class="mt-4 flex justify-center space-x-4">
-                <a href="index.html" class="hover:text-blue-400">Home</a>
-                <a href="#about" class="hover:text-blue-400">About</a>
-                <a href="sublease.html" class="hover:text-blue-400">Sublease</a>
-                <a href="ai-negotiator.html" class="hover:text-blue-400">AI Negotiator</a>
-                <a href="#contact" class="hover:text-blue-400">Contact</a>
+                <a href="/index" class="hover:text-blue-400">Home</a>
+                <a href="/index#about" class="hover:text-blue-400">About</a>
+                <a href="/sublease" class="hover:text-blue-400">Sublease</a>
+                <a href="/ai-negotiator" class="hover:text-blue-400">AI Negotiator</a>
+                <a href="/index#contact" class="hover:text-blue-400">Contact</a>
             </div>
-        </footer>
+        </div>
+    </footer>
 
     <!-- AI Chatbot -->
     <div class="fixed bottom-4 right-4 z-50">
@@ -190,16 +192,22 @@
         ];
         let currentQuestionIndex = 0;
 
+        function sanitizeInput(input) {
+            if (typeof input !== 'string') return '';
+            return input.replace(/[^a-zA-Z0-9\s,.-]/g, '').trim();
+        }
+
         function addRoom() {
-            const location = document.getElementById('location').value.trim();
+            const location = sanitizeInput(document.getElementById('location').value);
             const roomType = document.getElementById('roomType').value;
             const price = document.getElementById('price').value;
             const size = document.getElementById('size').value;
             const bedrooms = document.getElementById('bedrooms').value;
-            const amenities = document.getElementById('amenities').value.trim();
+            const amenities = sanitizeInput(document.getElementById('amenities').value);
 
             if (!location || !roomType || !price) {
                 alert('Please fill in all required fields (Location, Room Type, Price).');
+                console.error('Add room failed: Missing required fields', { location, roomType, price });
                 return;
             }
 
@@ -209,7 +217,7 @@
                 price: parseInt(price), 
                 size: size ? parseInt(size) : null, 
                 bedrooms: bedrooms ? parseInt(bedrooms) : null, 
-                amenities 
+                amenities: amenities || null 
             };
             rooms.push(room);
             renderRooms();
@@ -220,6 +228,53 @@
             document.getElementById('size').value = '';
             document.getElementById('bedrooms').value = '';
             document.getElementById('amenities').value = '';
+        }
+
+        function askAI() {
+            const location = sanitizeInput(document.getElementById('location').value);
+            const roomType = document.getElementById('roomType').value;
+            const price = document.getElementById('price').value;
+            const size = document.getElementById('size').value;
+            const bedrooms = document.getElementById('bedrooms').value;
+            const amenities = sanitizeInput(document.getElementById('amenities').value);
+
+            // Detailed validation
+            if (!location) {
+                alert('Please enter a valid location (e.g., Toronto, ON).');
+                console.error('askAI: Location is empty or invalid', { location });
+                return;
+            }
+            if (!roomType) {
+                alert('Please select a room type.');
+                console.error('askAI: Room type is not selected', { roomType });
+                return;
+            }
+            if (!price || isNaN(price) || parseInt(price) <= 0) {
+                alert('Please enter a valid price greater than 0.');
+                console.error('askAI: Price is invalid', { price });
+                return;
+            }
+
+            const searchData = {
+                location,
+                roomType,
+                price: parseInt(price),
+                size: size && !isNaN(size) && parseInt(size) > 0 ? parseInt(size) : null,
+                bedrooms: bedrooms && !isNaN(bedrooms) && parseInt(bedrooms) >= 0 ? parseInt(bedrooms) : null,
+                amenities: amenities || null
+            };
+
+            console.log('askAI: Collected searchData', searchData);
+
+            try {
+                const encodedSearch = encodeURIComponent(JSON.stringify(searchData));
+                const targetUrl = `/ai-negotiator?roomData=${encodedSearch}`;
+                console.log('askAI: Navigating to', targetUrl);
+                window.location.href = targetUrl;
+            } catch (error) {
+                console.error('askAI: Error encoding or navigating', error);
+                alert('Error processing your request. Please try again.');
+            }
         }
 
         function renderRooms() {
@@ -242,23 +297,31 @@
         }
 
         async function searchRooms() {
-            const location = document.getElementById('location').value.trim();
+            const location = sanitizeInput(document.getElementById('location').value);
             const roomType = document.getElementById('roomType').value;
             const price = document.getElementById('price').value;
             const size = document.getElementById('size').value;
             const bedrooms = document.getElementById('bedrooms').value;
-            const amenities = document.getElementById('amenities').value.trim();
+            const amenities = sanitizeInput(document.getElementById('amenities').value);
 
-            if (!location || !roomType || !price) {
-                alert('Please fill in all required fields (Location, Room Type, Price).');
+            if (!location || !roomType || !price || isNaN(price) || parseInt(price) <= 0) {
+                alert('Please fill in all required fields (Location, Room Type, Price) with valid values.');
+                console.error('searchRooms: Validation failed', { location, roomType, price });
                 return;
             }
 
-            const requestBody = { location, roomType, price, size: size ? parseInt(size) : null, bedrooms: bedrooms ? parseInt(bedrooms) : null, amenities };
+            const requestBody = { 
+                location, 
+                roomType, 
+                price: parseInt(price), 
+                size: size ? parseInt(size) : null, 
+                bedrooms: bedrooms ? parseInt(bedrooms) : null, 
+                amenities: amenities || null 
+            };
             let kijijiUrl = '', marketplaceUrl = '';
 
             try {
-                const kijijiResponse = await fetch('http://localhost:3000/api/predict/kijiji', {
+                const kijijiResponse = await fetch('http://localhost:8081/api/predict/kijiji', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody)
@@ -268,11 +331,11 @@
                     kijijiUrl = url;
                 } else {
                     const errorData = await kijijiResponse.json();
-                    console.warn(`Kijiji fetch failed: ${errorData.error || 'Unknown error'}`);
+                    console.warn(`searchRooms: Kijiji fetch failed: ${errorData.error || 'Unknown error'}`);
                 }
-                console.log('Kijiji URL:', kijijiUrl);
+                console.log('searchRooms: Kijiji URL', kijijiUrl);
 
-                const marketplaceResponse = await fetch('http://localhost:3000/api/predict/marketplace', {
+                const marketplaceResponse = await fetch('http://localhost:8081/api/predict/marketplace', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(requestBody)
@@ -282,9 +345,9 @@
                     marketplaceUrl = url;
                 } else {
                     const errorData = await marketplaceResponse.json();
-                    console.warn(`Marketplace fetch failed: ${errorData.error || 'Unknown error'}`);
+                    console.warn(`searchRooms: Marketplace fetch failed: ${errorData.error || 'Unknown error'}`);
                 }
-                console.log('Marketplace URL:', marketplaceUrl);
+                console.log('searchRooms: Marketplace URL', marketplaceUrl);
 
                 if (kijijiUrl) window.open(kijijiUrl, '_blank');
                 if (marketplaceUrl) window.open(marketplaceUrl, '_blank');
@@ -300,7 +363,7 @@
                 document.getElementById('amenities').value = '';
             } catch (error) {
                 alert(`Error searching: ${error.message}`);
-                console.error('Search error:', error);
+                console.error('searchRooms: Error', error);
             }
         }
 
@@ -328,10 +391,10 @@
                     throw new Error(`Wit.ai API error: ${response.status} - ${response.statusText}`);
                 }
                 const data = await response.json();
-                console.log(`Wit.ai response for "${message}":`, JSON.stringify(data, null, 2));
+                console.log(`queryWitAI: Response for "${message}"`, JSON.stringify(data, null, 2));
                 return data;
             } catch (error) {
-                console.error(`Wit.ai error for message "${message}":`, error);
+                console.error(`queryWitAI: Error for message "${message}"`, error);
                 appendMessage('AI', 'Sorry, I had trouble understanding that. Let’s try again.', 'left');
                 return null;
             }
@@ -407,7 +470,6 @@
                 const entities = witData.entities;
                 const lowerMessage = message.toLowerCase();
 
-                // wit$amount_of_money:final_price and wit$amount_of_money:deposit
                 if (entities['wit$amount_of_money:final_price']) {
                     const moneyEntities = entities['wit$amount_of_money:final_price'];
                     for (const moneyEntity of moneyEntities) {
@@ -439,20 +501,17 @@
                     }
                 }
 
-                // house_type:house_type
                 if (entities['house_type:house_type']) {
                     rentalData.houseType = entities['house_type:house_type'][0].value;
                     userProvided.houseType = true;
                 }
 
-                // wit$location:location
                 if (entities['wit$location:location']) {
                     const locationEntity = entities['wit$location:location'][0];
                     rentalData.location = locationEntity.resolved?.values?.[0]?.name || locationEntity.value;
                     userProvided.location = true;
                 }
 
-                // yes_no:yes_no (utilities, pets, parking, first/last, contract)
                 if (entities['yes_no:yes_no']) {
                     const yesNo = entities['yes_no:yes_no'][0].value === 'yes';
                     if (lowerMessage.includes('utilities')) {
@@ -471,7 +530,6 @@
                         rentalData.contract = yesNo;
                         userProvided.contract = true;
                     } else {
-                        // Infer based on question index if context is unclear
                         if (currentQuestionIndex === 4 && !userProvided.utilities) {
                             rentalData.utilities = yesNo;
                             userProvided.utilities = true;
@@ -529,7 +587,7 @@
             if (hasSearchIntent) {
                 let location = '', price = '', roomType = '', size = '', bedrooms = '', amenities = '';
                 const locationMatch = lowerMessage.match(/(?:in|at)\s+([a-z\s,]+)(?:\s+for|$)/i);
-                if (locationMatch) location = locationMatch[1].trim();
+                if (locationMatch) location = sanitizeInput(locationMatch[1].trim());
                 const priceMatch = lowerMessage.match(/\$?(\d+)(?:\s*dollars)?/i);
                 if (priceMatch) price = priceMatch[1];
                 const roomTypes = ['house', 'apartment', 'condo', 'townhouse'];

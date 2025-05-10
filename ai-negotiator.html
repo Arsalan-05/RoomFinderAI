@@ -6,11 +6,27 @@
     <title>Room Finder - AI Negotiator</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        #chatbotPopup {
-            transition: transform 0.3s ease-in-out;
+        #chatMessages {
+            height: 500px;
+            overflow-y: auto;
+            scrollbar-width: thin;
         }
-        #chatbotPopup.hidden {
-            transform: translateY(100%);
+        #chatMessages::-webkit-scrollbar {
+            width: 8px;
+        }
+        #chatMessages::-webkit-scrollbar-track {
+            background: #f1f1f1;
+        }
+        #chatMessages::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 4px;
+        }
+        #chatMessages::-webkit-scrollbar-thumb:hover {
+            background: #555;
+        }
+        .typing-indicator {
+            color: #6b7280; /* gray-500 */
+            font-style: italic;
         }
     </style>
 </head>
@@ -20,11 +36,11 @@
         <nav class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-6">
                 <div class="text-2xl font-bold text-blue-600">Room Finder</div>
-                <a href="index.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
-                <a href="index.html#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
-                <a href="sublease.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
-                <a href="ai-negotiator.html" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
-                <a href="index.html#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
+                <a href="/index" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
+                <a href="/index#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
+                <a href="/sublease" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
+                <a href="/ai-negotiator" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
+                <a href="/index#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
             </div>
         </nav>
     </header>
@@ -32,11 +48,20 @@
     <!-- Main Content -->
     <main class="flex-grow w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <!-- AI Negotiator Section -->
-        <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8">
+        <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
             <h2 class="text-3xl font-bold text-gray-800 mb-6 text-center">AI Negotiator</h2>
-            <p class="text-lg text-gray-600 mb-6">Let our AI Negotiator assist you in getting the best deal. Whether you're renting or subleasing, our AI provides smart suggestions for pricing, terms, and communication to ensure a smooth negotiation process.</p>
-            <div class="flex justify-center">
-                <a href="mailto:support@roomfinder.com" class="inline-block bg-blue-600 text-white px-8 py-3 rounded-full hover:bg-blue-700 transition font-semibold shadow-md hover:shadow-lg">Try AI Negotiator</a>
+            <p class="text-lg text-gray-600 mb-6 text-center">Chat with our AI Negotiator to get pricing tips and negotiation strategies for your rental search.</p>
+            <div class="bg-gray-50 border border-gray-200 rounded-lg">
+                <div class="bg-blue-600 text-white p-4 rounded-t-lg">
+                    <h3 class="text-lg font-semibold">AI Negotiator Assistant</h3>
+                </div>
+                <div id="chatMessages" class="p-4">
+                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental. Please review the search details below or ask me for negotiation tips.</p>
+                </div>
+                <div class="p-4 border-t border-gray-200">
+                    <input id="chatInput" type="text" class="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="Type your message...">
+                    <button onclick="sendChatMessage()" class="mt-3 w-full bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition font-semibold">Send</button>
+                </div>
             </div>
         </section>
     </main>
@@ -46,74 +71,136 @@
         <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <p class="text-sm">© 2025 Room Finder. All rights reserved.</p>
             <div class="mt-4 flex justify-center space-x-4">
-                <a href="index.html" class="hover:text-blue-400">Home</a>
-                <a href="index.html#about" class="hover:text-blue-400">About</a>
-                <a href="sublease.html" class="hover:text-blue-400">Sublease</a>
-                <a href="ai-negotiator.html" class="hover:text-blue-400">AI Negotiator</a>
-                <a href="index.html#contact" class="hover:text-blue-400">Contact</a>
+                <a href="/index" class="hover:text-blue-400">Home</a>
+                <a href="/index#about" class="hover:text-blue-400">About</a>
+                <a href="/sublease" class="hover:text-blue-400">Sublease</a>
+                <a href="/ai-negotiator" class="hover:text-blue-400">AI Negotiator</a>
+                <a href="/index#contact" class="hover:text-blue-400">Contact</a>
             </div>
         </div>
     </footer>
 
-    <!-- AI Chatbot -->
-    <div class="fixed bottom-4 right-4 z-50">
-        <button id="chatbotToggle" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-4-4v8"></path>
-            </svg>
-        </button>
-        <div id="chatbotPopup" class="hidden fixed bottom-20 right-4 w-80 bg-white rounded-lg shadow-xl border border-gray-200">
-            <div class="bg-blue-600 text-white p-4 rounded-t-lg">
-                <h3 class="text-lg font-semibold">Room Finder AI Assistant</h3>
-            </div>
-            <div id="chatMessages" class="p-4 h-64 overflow-y-auto">
-                <p class="text-gray-600">Hello! How can I assist you with negotiations?</p>
-            </div>
-            <div class="p-4 border-t border-gray-200">
-                <input id="chatInput" type="text" class="w-full p-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
-                <button onclick="sendChatMessage()" class="mt-2 w-full bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition">Send</button>
-            </div>
-        </div>
-    </div>
-
     <script>
-        // Chatbot functionality
-        document.getElementById('chatbotToggle').addEventListener('click', () => {
-            const popup = document.getElementById('chatbotPopup');
-            popup.classList.toggle('hidden');
-        });
+        let isTyping = false;
+        let typingTimeout;
 
-        function sendChatMessage() {
+        function populateSearchSummary() {
+            try {
+                const urlParams = new URLSearchParams(window.location.search);
+                const roomData = urlParams.get('roomData');
+                console.log('populateSearchSummary: Received roomData', roomData);
+
+                if (!roomData) {
+                    console.warn('populateSearchSummary: No roomData parameter found in URL');
+                    const errorMessage = 'No search details provided. Please return to the home page to enter your search criteria.';
+                    appendMessage('AI', errorMessage, 'left');
+                    appendMessage('AI', 'You can manually enter details or try again from the home page.', 'left');
+                    return;
+                }
+
+                let searchData;
+                try {
+                    searchData = JSON.parse(decodeURIComponent(roomData));
+                    console.log('populateSearchSummary: Parsed searchData', searchData);
+                } catch (parseError) {
+                    console.error('populateSearchSummary: Error parsing roomData', parseError);
+                    const errorMessage = 'Invalid search details format. Please return to the home page to try again.';
+                    appendMessage('AI', errorMessage, 'left');
+                    return;
+                }
+
+                // Validate required fields
+                if (!searchData.location || !searchData.roomType || !searchData.price) {
+                    console.warn('populateSearchSummary: Missing required fields', searchData);
+                    const errorMessage = 'Incomplete search details. Please ensure location, room type, and price are provided.';
+                    appendMessage('AI', errorMessage, 'left');
+                    return;
+                }
+
+                const textMessage = `I'm looking for a ${searchData.roomType} in ${searchData.location} for $${searchData.price}/month${searchData.size ? `, ${searchData.size} sq ft` : ''}${searchData.bedrooms ? `, ${searchData.bedrooms} bedrooms` : ''}${searchData.amenities ? ` with ${searchData.amenities}` : ''}. Can you help me negotiate the best deal?`;
+
+                console.log('populateSearchSummary: Setting textMessage', textMessage);
+                appendMessage('User', textMessage, 'right');
+                appendMessage('AI', 'Got it! I can help with negotiation tips for this rental. Try offering 5-10% below the listed price to start. Would you like specific phrasing for your offer?', 'left');
+            } catch (error) {
+                console.error('populateSearchSummary: General error', error);
+                const errorMessage = 'Error loading search details. Please return to the home page to try again.';
+                appendMessage('AI', errorMessage, 'left');
+            }
+        }
+
+        function appendMessage(sender, message, align, isTypingIndicator = false) {
+            const messages = document.getElementById('chatMessages');
+            const messageElement = document.createElement('p');
+            messageElement.className = `text-${align} text-${sender === 'User' ? 'blue-600' : 'gray-600'} mt-2 ${isTypingIndicator ? 'typing-indicator' : ''}`;
+            messageElement.textContent = isTypingIndicator ? message : `${sender}: ${message}`;
+            messageElement.id = isTypingIndicator ? 'typing-indicator' : '';
+            messages.appendChild(messageElement);
+            messages.scrollTop = messages.scrollHeight;
+        }
+
+        function removeTypingIndicator() {
+            const typingIndicator = document.getElementById('typing-indicator');
+            if (typingIndicator) {
+                typingIndicator.remove();
+            }
+        }
+
+        async function sendChatMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
             if (!message) return;
 
-            const messages = document.getElementById('chatMessages');
-            // Append user message
-            const userMessage = document.createElement('p');
-            userMessage.className = 'text-right text-blue-600 mt-2';
-            userMessage.textContent = `You: ${message}`;
-            messages.appendChild(userMessage);
+            // Remove typing indicator and append user message
+            removeTypingIndicator();
+            isTyping = false;
+            appendMessage('User', message, 'right');
 
-            // Simulate AI response
-            const aiMessage = document.createElement('p');
-            aiMessage.className = 'text-left text-gray-600 mt-2';
-            aiMessage.textContent = `AI: I'm here to help! For "${message}", try using our AI Negotiator for pricing suggestions or check the Sublease page for listing options.`;
-            messages.appendChild(aiMessage);
+            // Process AI response
+            const lowerMessage = message.toLowerCase();
+            if (lowerMessage.includes('phrasing') || lowerMessage.includes('offer')) {
+                const urlParams = new URLSearchParams(window.location.search);
+                const roomData = urlParams.get('roomData');
+                let offerPrice = '';
+                if (roomData) {
+                    try {
+                        const searchData = JSON.parse(decodeURIComponent(roomData));
+                        const price = parseInt(searchData.price);
+                        offerPrice = Math.round(price * 0.9); // Suggest 10% below
+                    } catch (e) {
+                        console.error('sendChatMessage: Error parsing roomData for offer', e);
+                    }
+                }
+                appendMessage('AI', `Here’s a sample offer: "Hi, I’m interested in the ${roomData ? JSON.parse(decodeURIComponent(roomData)).roomType : 'rental'} in ${roomData ? JSON.parse(decodeURIComponent(roomData)).location : 'the location'}. Would you consider $${offerPrice || 'a lower price'} per month? I’m a reliable tenant with good credit." Adjust as needed!`, 'left');
+            } else if (lowerMessage.includes('negotiate') || lowerMessage.includes('price') || lowerMessage.includes('deal')) {
+                appendMessage('AI', 'To negotiate a better deal, try offering 5-10% below the listed price and highlight your reliability as a tenant. Would you like specific phrasing for your offer?', 'left');
+            } else if (lowerMessage.includes('amenities') || lowerMessage.includes('utilities')) {
+                appendMessage('AI', 'Ask the landlord if utilities or amenities like parking can be included in the rent to reduce your costs. Want me to draft a sample question?', 'left');
+            } else {
+                appendMessage('AI', `I'm not sure how to respond to "${message}". Try asking about negotiating the price, amenities, or lease terms!`, 'left');
+            }
 
-            // Scroll to bottom
-            messages.scrollTop = messages.scrollHeight;
-
-            // Clear input
             input.value = '';
         }
 
-        // Allow sending message with Enter key
+        document.getElementById('chatInput').addEventListener('input', (e) => {
+            const input = e.target.value.trim();
+            if (input && !isTyping) {
+                isTyping = true;
+                appendMessage('User', 'User is typing...', 'right', true);
+            } else if (!input && isTyping) {
+                removeTypingIndicator();
+                isTyping = false;
+            }
+        });
+
         document.getElementById('chatInput').addEventListener('keypress', (e) => {
             if (e.key === 'Enter') {
                 sendChatMessage();
             }
         });
+
+        document.addEventListener('DOMContentLoaded', populateSearchSummary);
     </script>
 </body>
 </html>
