@@ -13,11 +13,12 @@
             transform: translateY(-4px);
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
         }
-        #chatbotPopup {
-            transition: transform 0.3s ease-in-out;
+        #aiButton {
+            transition: transform 0.3s ease-in-out, box-shadow 0.2s ease-in-out;
         }
-        #chatbotPopup.hidden {
-            transform: translateY(100%);
+        #aiButton:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
     </style>
 </head>
@@ -84,9 +85,8 @@
                     <button onclick="addRoom()" class="flex-1 bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition font-semibold">Add Room</button>
                     <button onclick="searchRooms()" class="flex-1 bg-green-600 text-white p-3 rounded-lg hover:bg-green-700 transition font-semibold">Search All Sites</button>
                 </div>
-                <div class="flex space-x-4">
-                    <button onclick="messageFriend()" class="flex-1 bg-purple-600 text-white p-3 rounded-lg hover:bg-purple-700 transition font-semibold">Message Friend About Rental</button>
-                    <button onclick="askAI()" class="flex-1 bg-indigo-600 text-white p-3 rounded-lg hover:bg-indigo-700 transition font-semibold">Ask AI</button>
+                <div class="flex justify-center">
+                    <button onclick="askAI()" class="w-full max-w-xs bg-indigo-600 text-white p-3 rounded-lg hover:bg-indigo-700 transition font-semibold">Ask AI</button>
                 </div>
             </div>
         </section>
@@ -130,67 +130,17 @@
         </div>
     </footer>
 
-    <!-- AI Chatbot -->
+    <!-- AI Button -->
     <div class="fixed bottom-4 right-4 z-50">
-        <button id="chatbotToggle" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-4-4v8"></path>
+        <button id="aiButton" onclick="window.location.href='/ai-negotiator'" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition flex items-center justify-center w-16 h-16">
+            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
             </svg>
         </button>
-        <div id="chatbotPopup" class="hidden fixed bottom-20 right-4 w-80 bg-white rounded-lg shadow-xl border border-gray-200">
-            <div class="bg-blue-600 text-white p-4 rounded-t-lg">
-                <h3 class="text-lg font-semibold">Room Finder AI Assistant</h3>
-            </div>
-            <div id="chatMessages" class="p-4 h-64 overflow-y-auto">
-                <p class="text-gray-600">Hello! I can help you find a room or message your friend about a rental. Try saying something like: 'Find a room in Toronto for $1000' or click 'Message Friend About Rental' above!</p>
-            </div>
-            <div class="p-4 border-t border-gray-200">
-                <input id="chatInput" type="text" class="w-full p-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
-                <button onclick="sendChatMessage()" class="mt-2 w-full bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition">Send</button>
-            </div>
-        </div>
     </div>
 
     <script>
         let rooms = [];
-        let messageFriendMode = false;
-        let messageCount = 0;
-        let rentalData = {
-            finalPrice: null,
-            houseType: null,
-            location: null,
-            deposit: null,
-            utilities: null,
-            pets: null,
-            parking: null,
-            firstLastMonth: null,
-            contract: null
-        };
-        let userProvided = {
-            finalPrice: false,
-            houseType: false,
-            location: false,
-            deposit: false,
-            utilities: false,
-            pets: false,
-            parking: false,
-            firstLastMonth: false,
-            contract: false
-        };
-        let priceHistory = [];
-        const WIT_AI_TOKEN = 'MEF6KIWW7YBERPO3WPAY5VIGGJFTXNLU';
-        const questionsToAsk = [
-            "What’s the final price per month?",
-            "What type of house is it (e.g., apartment, house, condo)?",
-            "Where is it located?",
-            "How much is the deposit?",
-            "Are utilities included?",
-            "Are pets allowed?",
-            "Is parking available?",
-            "Do I need to pay first and last month’s rent upfront?",
-            "Is there a contract or lease agreement?"
-        ];
-        let currentQuestionIndex = 0;
 
         function sanitizeInput(input) {
             if (typeof input !== 'string') return '';
@@ -366,269 +316,6 @@
                 console.error('searchRooms: Error', error);
             }
         }
-
-        // Chatbot functionality
-        document.getElementById('chatbotToggle').addEventListener('click', () => {
-            const popup = document.getElementById('chatbotPopup');
-            popup.classList.toggle('hidden');
-        });
-
-        function appendMessage(sender, message, align) {
-            const messages = document.getElementById('chatMessages');
-            const messageElement = document.createElement('p');
-            messageElement.className = `text-${align} text-${sender === 'You' || sender === 'Friend' ? 'blue-600' : 'gray-600'} mt-2`;
-            messageElement.textContent = `${sender}: ${message}`;
-            messages.appendChild(messageElement);
-            messages.scrollTop = messages.scrollHeight;
-        }
-
-        async function queryWitAI(message) {
-            try {
-                const response = await fetch(`https://api.wit.ai/message?v=20250509&q=${encodeURIComponent(message)}`, {
-                    headers: { 'Authorization': `Bearer ${WIT_AI_TOKEN}` }
-                });
-                if (!response.ok) {
-                    throw new Error(`Wit.ai API error: ${response.status} - ${response.statusText}`);
-                }
-                const data = await response.json();
-                console.log(`queryWitAI: Response for "${message}"`, JSON.stringify(data, null, 2));
-                return data;
-            } catch (error) {
-                console.error(`queryWitAI: Error for message "${message}"`, error);
-                appendMessage('AI', 'Sorry, I had trouble understanding that. Let’s try again.', 'left');
-                return null;
-            }
-        }
-
-        function messageFriend() {
-            messageFriendMode = true;
-            messageCount = 0;
-            rentalData = {
-                finalPrice: null,
-                houseType: null,
-                location: null,
-                deposit: null,
-                utilities: null,
-                pets: null,
-                parking: null,
-                firstLastMonth: null,
-                contract: null
-            };
-            userProvided = {
-                finalPrice: false,
-                houseType: false,
-                location: false,
-                deposit: false,
-                utilities: false,
-                pets: false,
-                parking: false,
-                firstLastMonth: false,
-                contract: false
-            };
-            priceHistory = [];
-            currentQuestionIndex = 0;
-
-            const messages = document.getElementById('chatMessages');
-            messages.innerHTML = '';
-            appendMessage('AI', 'Hi! I’m here to help gather details about the rental property. Let’s start with: What’s the final price per month?', 'left');
-
-            const popup = document.getElementById('chatbotPopup');
-            if (popup.classList.contains('hidden')) {
-                popup.classList.remove('hidden');
-            }
-        }
-
-        function suggestNextQuestion() {
-            if (currentQuestionIndex < questionsToAsk.length) {
-                appendMessage('AI', `Suggestion: Ask "${questionsToAsk[currentQuestionIndex]}"`, 'left');
-            }
-        }
-
-        function summarizeRentalData() {
-            const summary = [
-                `Here’s what I gathered about the rental:`,
-                `Final Price: ${rentalData.finalPrice ? `$${rentalData.finalPrice}` : 'Not provided'}`,
-                `House Type: ${rentalData.houseType || 'Not provided'}`,
-                `Location: ${rentalData.location || 'Not provided'}`,
-                `Deposit: ${rentalData.deposit ? `$${rentalData.deposit}` : 'Not provided'}`,
-                `Utilities Included: ${rentalData.utilities !== null ? (rentalData.utilities ? 'Yes' : 'No') : 'Not provided'}`,
-                `Pets Allowed: ${rentalData.pets !== null ? (rentalData.pets ? 'Yes' : 'No') : 'Not provided'}`,
-                `Parking Available: ${rentalData.parking !== null ? (rentalData.parking ? 'Yes' : 'No') : 'Not provided'}`,
-                `First/Last Month Required: ${rentalData.firstLastMonth !== null ? (rentalData.firstLastMonth ? 'Yes' : 'No') : 'Not provided'}`,
-                `Contract Required: ${rentalData.contract !== null ? (rentalData.contract ? 'Yes' : 'No') : 'Not provided'}`
-            ].join('\n');
-            appendMessage('AI', summary, 'left');
-            messageFriendMode = false;
-        }
-
-        async function processFriendMessage(message) {
-            messageCount++;
-            appendMessage('Friend', message, 'right');
-
-            const witData = await queryWitAI(message);
-            if (witData) {
-                const entities = witData.entities;
-                const lowerMessage = message.toLowerCase();
-
-                if (entities['wit$amount_of_money:final_price']) {
-                    const moneyEntities = entities['wit$amount_of_money:final_price'];
-                    for (const moneyEntity of moneyEntities) {
-                        const value = moneyEntity.value;
-                        const hasRole = moneyEntity.role && moneyEntity.role.length > 0;
-                        if (hasRole && moneyEntity.role === 'final_price' || lowerMessage.includes('price') || lowerMessage.includes('final')) {
-                            priceHistory.push(value);
-                            if (priceHistory.length > 1 && priceHistory[priceHistory.length - 1] !== priceHistory[priceHistory.length - 2]) {
-                                appendMessage('AI', `I noticed multiple prices: $${priceHistory.join(' and $')}. Which one is correct?`, 'left');
-                                return;
-                            }
-                            rentalData.finalPrice = value;
-                            userProvided.finalPrice = true;
-                        }
-                    }
-                }
-                if (entities['wit$amount_of_money:deposit']) {
-                    const moneyEntities = entities['wit$amount_of_money:deposit'];
-                    for (const moneyEntity of moneyEntities) {
-                        const value = moneyEntity.value;
-                        const hasRole = moneyEntity.role && moneyEntity.role.length > 0;
-                        if (hasRole && moneyEntity.role === 'deposit' || lowerMessage.includes('deposit')) {
-                            rentalData.deposit = value;
-                            userProvided.deposit = true;
-                        } else if (currentQuestionIndex === 3 || lowerMessage.includes('deposit')) {
-                            rentalData.deposit = value;
-                            userProvided.deposit = true;
-                        }
-                    }
-                }
-
-                if (entities['house_type:house_type']) {
-                    rentalData.houseType = entities['house_type:house_type'][0].value;
-                    userProvided.houseType = true;
-                }
-
-                if (entities['wit$location:location']) {
-                    const locationEntity = entities['wit$location:location'][0];
-                    rentalData.location = locationEntity.resolved?.values?.[0]?.name || locationEntity.value;
-                    userProvided.location = true;
-                }
-
-                if (entities['yes_no:yes_no']) {
-                    const yesNo = entities['yes_no:yes_no'][0].value === 'yes';
-                    if (lowerMessage.includes('utilities')) {
-                        rentalData.utilities = yesNo;
-                        userProvided.utilities = true;
-                    } else if (lowerMessage.includes('pets')) {
-                        rentalData.pets = yesNo;
-                        userProvided.pets = true;
-                    } else if (lowerMessage.includes('parking')) {
-                        rentalData.parking = yesNo;
-                        userProvided.parking = true;
-                    } else if (lowerMessage.includes('first') || lowerMessage.includes('last')) {
-                        rentalData.firstLastMonth = yesNo;
-                        userProvided.firstLastMonth = true;
-                    } else if (lowerMessage.includes('contract') || lowerMessage.includes('lease')) {
-                        rentalData.contract = yesNo;
-                        userProvided.contract = true;
-                    } else {
-                        if (currentQuestionIndex === 4 && !userProvided.utilities) {
-                            rentalData.utilities = yesNo;
-                            userProvided.utilities = true;
-                        }
-                        else if (currentQuestionIndex === 5 && !userProvided.pets) {
-                            rentalData.pets = yesNo;
-                            userProvided.pets = true;
-                        }
-                        else if (currentQuestionIndex === 6 && !userProvided.parking) {
-                            rentalData.parking = yesNo;
-                            userProvided.parking = true;
-                        }
-                        else if (currentQuestionIndex === 7 && !userProvided.firstLastMonth) {
-                            rentalData.firstLastMonth = yesNo;
-                            userProvided.firstLastMonth = true;
-                        }
-                        else if (currentQuestionIndex === 8 && !userProvided.contract) {
-                            rentalData.contract = yesNo;
-                            userProvided.contract = true;
-                        }
-                    }
-                }
-            }
-
-            currentQuestionIndex++;
-            if (messageCount >= 9) {
-                summarizeRentalData();
-            } else {
-                if (currentQuestionIndex < questionsToAsk.length) {
-                    appendMessage('AI', questionsToAsk[currentQuestionIndex], 'left');
-                }
-                suggestNextQuestion();
-            }
-        }
-
-        async function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message) return;
-
-            if (messageFriendMode) {
-                await processFriendMessage(message);
-            } else {
-                appendMessage('You', message, 'right');
-                await processChatMessage(message);
-            }
-            input.value = '';
-        }
-
-        async function processChatMessage(message) {
-            const lowerMessage = message.toLowerCase();
-            const searchKeywords = ['find', 'search', 'look for', 'room', 'apartment', 'house', 'condo', 'townhouse'];
-            const hasSearchIntent = searchKeywords.some(keyword => lowerMessage.includes(keyword));
-
-            if (hasSearchIntent) {
-                let location = '', price = '', roomType = '', size = '', bedrooms = '', amenities = '';
-                const locationMatch = lowerMessage.match(/(?:in|at)\s+([a-z\s,]+)(?:\s+for|$)/i);
-                if (locationMatch) location = sanitizeInput(locationMatch[1].trim());
-                const priceMatch = lowerMessage.match(/\$?(\d+)(?:\s*dollars)?/i);
-                if (priceMatch) price = priceMatch[1];
-                const roomTypes = ['house', 'apartment', 'condo', 'townhouse'];
-                roomType = roomTypes.find(type => lowerMessage.includes(type)) || 'Apartment';
-                const sizeMatch = lowerMessage.match(/(\d+)\s*(?:sq\s*ft|square\s*feet)/i);
-                if (sizeMatch) size = sizeMatch[1];
-                const bedroomsMatch = lowerMessage.match(/(\d+)\s*bedroom/i);
-                if (bedroomsMatch) bedrooms = bedroomsMatch[1];
-                const amenitiesList = ['wi-fi', 'parking', 'gym', 'pool', 'laundry'];
-                amenities = amenitiesList.filter(amenity => lowerMessage.includes(amenity)).join(', ');
-
-                if (location && price) {
-                    document.getElementById('location').value = location;
-                    document.getElementById('roomType').value = roomType.charAt(0).toUpperCase() + roomType.slice(1);
-                    document.getElementById('price').value = price;
-                    if (size) document.getElementById('size').value = size;
-                    if (bedrooms) document.getElementById('bedrooms').value = bedrooms;
-                    if (amenities) document.getElementById('amenities').value = amenities;
-
-                    appendMessage('AI', `Got it! Searching for a ${roomType} in ${location} for $${price}/month${size ? `, ${size} sq ft` : ''}${bedrooms ? `, ${bedrooms} bedrooms` : ''}${amenities ? ` with ${amenities}` : ''}. Opening search results...`, 'left');
-                    await searchRooms();
-                } else {
-                    appendMessage('AI', 'I need a location and price to search for a room. Try saying: "Find a room in Toronto for $1000".', 'left');
-                }
-                return;
-            }
-
-            if (lowerMessage.includes('how') || lowerMessage.includes('work') || lowerMessage.includes('what')) {
-                appendMessage('AI', 'Room Finder helps you search for rooms on Kijiji and Facebook Marketplace. Enter details like location and price in the form above, or ask me to search for you (e.g., "Find a room in Toronto for $1000"). You can also save rooms to your list or message your friend about a rental!', 'left');
-            } else if (lowerMessage.includes('sublease') || lowerMessage.includes('ai negotiator')) {
-                appendMessage('AI', `For "${message}", check out our Sublease page for subletting options or use the AI Negotiator to get pricing tips!`, 'left');
-            } else {
-                appendMessage('AI', `I'm not sure how to help with "${message}". Try asking to find a room (e.g., "Find a room in Toronto for $1000") or click 'Message Friend About Rental' to gather details from your friend!`, 'left');
-            }
-        }
-
-        document.getElementById('chatInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendChatMessage();
-            }
-        });
     </script>
 </body>
 </html>

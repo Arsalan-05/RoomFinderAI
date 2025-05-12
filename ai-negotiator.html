@@ -50,13 +50,13 @@
         <!-- AI Negotiator Section -->
         <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
             <h2 class="text-3xl font-bold text-gray-800 mb-6 text-center">AI Negotiator</h2>
-            <p class="text-lg text-gray-600 mb-6 text-center">Chat with our AI Negotiator to get pricing tips and negotiation strategies for your rental search.</p>
+            <p class="text-lg text-gray-600 mb-6 text-center">Chat with our AI Negotiator to get pricing tips, negotiation strategies, and rental details for your search.</p>
             <div class="bg-gray-50 border border-gray-200 rounded-lg">
                 <div class="bg-blue-600 text-white p-4 rounded-t-lg">
                     <h3 class="text-lg font-semibold">AI Negotiator Assistant</h3>
                 </div>
                 <div id="chatMessages" class="p-4">
-                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental. Please review the search details below or ask me for negotiation tips.</p>
+                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental and gather details about your rental needs. Let's get started.</p>
                 </div>
                 <div class="p-4 border-t border-gray-200">
                     <input id="chatInput" type="text" class="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="Type your message...">
@@ -82,7 +82,43 @@
 
     <script>
         let isTyping = false;
-        let typingTimeout;
+        let rentalData = {
+            finalPrice: null,
+            houseType: null,
+            location: null,
+            deposit: null,
+            utilities: null,
+            pets: null,
+            parking: null,
+            firstLastMonth: null,
+            contract: null
+        };
+        let userProvided = {
+            finalPrice: false,
+            houseType: false,
+            location: false,
+            deposit: false,
+            utilities: false,
+            pets: false,
+            parking: false,
+            firstLastMonth: false,
+            contract: false
+        };
+        let priceHistory = [];
+        const questionsToAsk = [
+            "What’s the final price per month?",
+            "What type of house is it (e.g., apartment, house, condo)?",
+            "Where is it located?",
+            "How much is the deposit?",
+            "Are utilities included?",
+            "Are pets allowed?",
+            "Is parking available?",
+            "Do I need to pay first and last month’s rent upfront?",
+            "Is there a contract or lease agreement?"
+        ];
+        let currentQuestionIndex = 0;
+        let isAskingRentalQuestions = false;
+        let negotiationCompleted = false;
 
         function populateSearchSummary() {
             try {
@@ -92,9 +128,9 @@
 
                 if (!roomData) {
                     console.warn('populateSearchSummary: No roomData parameter found in URL');
-                    const errorMessage = 'No search details provided. Please return to the home page to enter your search criteria.';
+                    const errorMessage = 'No search details provided. I’ll need to gather some rental details from you.';
                     appendMessage('AI', errorMessage, 'left');
-                    appendMessage('AI', 'You can manually enter details or try again from the home page.', 'left');
+                    startRentalQuestions();
                     return;
                 }
 
@@ -104,16 +140,18 @@
                     console.log('populateSearchSummary: Parsed searchData', searchData);
                 } catch (parseError) {
                     console.error('populateSearchSummary: Error parsing roomData', parseError);
-                    const errorMessage = 'Invalid search details format. Please return to the home page to try again.';
+                    const errorMessage = 'Invalid search details format. Let’s gather the rental details manually.';
                     appendMessage('AI', errorMessage, 'left');
+                    startRentalQuestions();
                     return;
                 }
 
                 // Validate required fields
                 if (!searchData.location || !searchData.roomType || !searchData.price) {
                     console.warn('populateSearchSummary: Missing required fields', searchData);
-                    const errorMessage = 'Incomplete search details. Please ensure location, room type, and price are provided.';
+                    const errorMessage = 'Incomplete search details. Let’s gather the rental details manually.';
                     appendMessage('AI', errorMessage, 'left');
+                    startRentalQuestions();
                     return;
                 }
 
@@ -122,10 +160,31 @@
                 console.log('populateSearchSummary: Setting textMessage', textMessage);
                 appendMessage('User', textMessage, 'right');
                 appendMessage('AI', 'Got it! I can help with negotiation tips for this rental. Try offering 5-10% below the listed price to start. Would you like specific phrasing for your offer?', 'left');
+                negotiationCompleted = true;
+
+                // Pre-fill rental data from roomData if available
+                rentalData.finalPrice = searchData.price;
+                userProvided.finalPrice = true;
+                priceHistory.push(searchData.price);
+                rentalData.houseType = searchData.roomType;
+                userProvided.houseType = true;
+                rentalData.location = searchData.location;
+                userProvided.location = true;
+
+                // Skip to the next unanswered question
+                while (currentQuestionIndex < questionsToAsk.length && userProvided[Object.keys(userProvided)[currentQuestionIndex]]) {
+                    currentQuestionIndex++;
+                }
+
+                if (currentQuestionIndex < questionsToAsk.length) {
+                    appendMessage('AI', 'I also need some more details about your rental needs.', 'left');
+                    startRentalQuestions();
+                }
             } catch (error) {
                 console.error('populateSearchSummary: General error', error);
-                const errorMessage = 'Error loading search details. Please return to the home page to try again.';
+                const errorMessage = 'Error loading search details. Let’s gather the rental details manually.';
                 appendMessage('AI', errorMessage, 'left');
+                startRentalQuestions();
             }
         }
 
@@ -146,6 +205,76 @@
             }
         }
 
+        function startRentalQuestions() {
+            isAskingRentalQuestions = true;
+            if (currentQuestionIndex < questionsToAsk.length) {
+                appendMessage('AI', questionsToAsk[currentQuestionIndex], 'left');
+            } else {
+                isAskingRentalQuestions = false;
+                displayRentalSummary();
+            }
+        }
+
+        function processRentalAnswer(message) {
+            const lowerMessage = message.toLowerCase();
+            const question = questionsToAsk[currentQuestionIndex].toLowerCase();
+
+            if (question.includes('final price')) {
+                const priceMatch = lowerMessage.match(/\d+/);
+                rentalData.finalPrice = priceMatch ? parseInt(priceMatch[0]) : null;
+                userProvided.finalPrice = true;
+                if (rentalData.finalPrice) priceHistory.push(rentalData.finalPrice);
+            } else if (question.includes('type of house')) {
+                rentalData.houseType = message;
+                userProvided.houseType = true;
+            } else if (question.includes('located')) {
+                rentalData.location = message;
+                userProvided.location = true;
+            } else if (question.includes('deposit')) {
+                const depositMatch = lowerMessage.match(/\d+/);
+                rentalData.deposit = depositMatch ? parseInt(depositMatch[0]) : null;
+                userProvided.deposit = true;
+            } else if (question.includes('utilities')) {
+                rentalData.utilities = lowerMessage.includes('yes') ? 'Included' : 'Not included';
+                userProvided.utilities = true;
+            } else if (question.includes('pets')) {
+                rentalData.pets = lowerMessage.includes('yes') ? 'Allowed' : 'Not allowed';
+                userProvided.pets = true;
+            } else if (question.includes('parking')) {
+                rentalData.parking = lowerMessage.includes('yes') ? 'Available' : 'Not available';
+                userProvided.parking = true;
+            } else if (question.includes('first and last')) {
+                rentalData.firstLastMonth = lowerMessage.includes('yes') ? 'Required' : 'Not required';
+                userProvided.firstLastMonth = true;
+            } else if (question.includes('contract')) {
+                rentalData.contract = lowerMessage.includes('yes') ? 'Required' : 'Not required';
+                userProvided.contract = true;
+            }
+
+            currentQuestionIndex++;
+            if (currentQuestionIndex < questionsToAsk.length) {
+                appendMessage('AI', questionsToAsk[currentQuestionIndex], 'left');
+            } else {
+                isAskingRentalQuestions = false;
+                displayRentalSummary();
+            }
+        }
+
+        function displayRentalSummary() {
+            let summary = 'Here’s a summary of the rental details you provided:\n';
+            summary += rentalData.finalPrice ? `- Final Price: $${rentalData.finalPrice}/month\n` : '- Final Price: Not provided\n';
+            summary += rentalData.houseType ? `- House Type: ${rentalData.houseType}\n` : '- House Type: Not provided\n';
+            summary += rentalData.location ? `- Location: ${rentalData.location}\n` : '- Location: Not provided\n';
+            summary += rentalData.deposit ? `- Deposit: $${rentalData.deposit}\n` : '- Deposit: Not provided\n';
+            summary += rentalData.utilities ? `- Utilities: ${rentalData.utilities}\n` : '- Utilities: Not provided\n';
+            summary += rentalData.pets ? `- Pets: ${rentalData.pets}\n` : '- Pets: Not provided\n';
+            summary += rentalData.parking ? `- Parking: ${rentalData.parking}\n` : '- Parking: Not provided\n';
+            summary += rentalData.firstLastMonth ? `- First/Last Month’s Rent: ${rentalData.firstLastMonth}\n` : '- First/Last Month’s Rent: Not provided\n';
+            summary += rentalData.contract ? `- Contract: ${rentalData.contract}\n` : '- Contract: Not provided\n';
+            summary += 'Would you like to negotiate this rental or start over with new details?';
+            appendMessage('AI', summary.replace(/\n/g, ' '), 'left');
+        }
+
         async function sendChatMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
@@ -156,28 +285,44 @@
             isTyping = false;
             appendMessage('User', message, 'right');
 
-            // Process AI response
-            const lowerMessage = message.toLowerCase();
-            if (lowerMessage.includes('phrasing') || lowerMessage.includes('offer')) {
-                const urlParams = new URLSearchParams(window.location.search);
-                const roomData = urlParams.get('roomData');
-                let offerPrice = '';
-                if (roomData) {
-                    try {
-                        const searchData = JSON.parse(decodeURIComponent(roomData));
-                        const price = parseInt(searchData.price);
-                        offerPrice = Math.round(price * 0.9); // Suggest 10% below
-                    } catch (e) {
-                        console.error('sendChatMessage: Error parsing roomData for offer', e);
-                    }
-                }
-                appendMessage('AI', `Here’s a sample offer: "Hi, I’m interested in the ${roomData ? JSON.parse(decodeURIComponent(roomData)).roomType : 'rental'} in ${roomData ? JSON.parse(decodeURIComponent(roomData)).location : 'the location'}. Would you consider $${offerPrice || 'a lower price'} per month? I’m a reliable tenant with good credit." Adjust as needed!`, 'left');
-            } else if (lowerMessage.includes('negotiate') || lowerMessage.includes('price') || lowerMessage.includes('deal')) {
-                appendMessage('AI', 'To negotiate a better deal, try offering 5-10% below the listed price and highlight your reliability as a tenant. Would you like specific phrasing for your offer?', 'left');
-            } else if (lowerMessage.includes('amenities') || lowerMessage.includes('utilities')) {
-                appendMessage('AI', 'Ask the landlord if utilities or amenities like parking can be included in the rent to reduce your costs. Want me to draft a sample question?', 'left');
+            // Check if we're in the rental question phase
+            if (isAskingRentalQuestions) {
+                processRentalAnswer(message);
             } else {
-                appendMessage('AI', `I'm not sure how to respond to "${message}". Try asking about negotiating the price, amenities, or lease terms!`, 'left');
+                // Handle negotiation or post-summary actions
+                const lowerMessage = message.toLowerCase();
+                if (lowerMessage.includes('phrasing') || lowerMessage.includes('offer')) {
+                    let offerPrice = '';
+                    let roomType = rentalData.houseType || 'rental';
+                    let location = rentalData.location || 'the location';
+                    if (rentalData.finalPrice) {
+                        offerPrice = Math.round(rentalData.finalPrice * 0.9); // Suggest 10% below
+                    } else {
+                        const urlParams = new URLSearchParams(window.location.search);
+                        const roomData = urlParams.get('roomData');
+                        if (roomData) {
+                            try {
+                                const searchData = JSON.parse(decodeURIComponent(roomData));
+                                const price = parseInt(searchData.price);
+                                offerPrice = Math.round(price * 0.9);
+                                roomType = searchData.roomType;
+                                location = searchData.location;
+                            } catch (e) {
+                                console.error('sendChatMessage: Error parsing roomData for offer', e);
+                            }
+                        }
+                    }
+                    appendMessage('AI', `Here’s a sample offer: "Hi, I’m interested in the ${roomType} in ${location}. Would you consider $${offerPrice || 'a lower price'} per month? I’m a reliable tenant with good credit." Adjust as needed!`, 'left');
+                } else if (lowerMessage.includes('negotiate') || lowerMessage.includes('price') || lowerMessage.includes('deal')) {
+                    appendMessage('AI', 'To negotiate a better deal, try offering 5-10% below the listed price and highlight your reliability as a tenant. Would you like specific phrasing for your offer?', 'left');
+                } else if (lowerMessage.includes('amenities') || lowerMessage.includes('utilities')) {
+                    appendMessage('AI', 'Ask the landlord if utilities or amenities like parking can be included in the rent to reduce your costs. Want me to draft a sample question?', 'left');
+                } else if (lowerMessage.includes('start over') || lowerMessage.includes('new details')) {
+                    appendMessage('AI', 'Sure, let’s start over with new rental details.', 'left');
+                    startRentalQuestions();
+                } else {
+                    appendMessage('AI', `I'm not sure how to respond to "${message}". Try asking about negotiating the price, amenities, lease terms, or say "start over" to provide new details!`, 'left');
+                }
             }
 
             input.value = '';
