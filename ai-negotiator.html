@@ -57,7 +57,7 @@
                     <h3 class="text-lg font-semibold">AI Negotiator Assistant</h3>
                 </div>
                 <div id="chatMessages" class="p-4">
-                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental. Please provide details about the rental, such as price, location, house type, deposit, utilities, pets, parking, first/last month’s rent, and contract.</p>
+                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental. Please provide details about the rental, such as price, location, house type, bedrooms, utilities, pets, deposit, parking, first/last month’s rent, and contract.</p>
                 </div>
                 <div class="p-4 border-t border-gray-200">
                     <input id="chatInput" type="text" class="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="Type your message...">
@@ -87,23 +87,23 @@
             dictionaryPath: 'https://unpkg.com/typo-js@1.2.3/dictionaries'
         });
 
-        // Wit.ai client access token (replace with your token)
-        const WIT_AI_TOKEN = 'YOUR_WIT_AI_CLIENT_ACCESS_TOKEN';
+        // Wit.ai client access token
+        const WIT_AI_TOKEN = 'MEF6KIWW7YBERPO3WPAY5VIGGJFTXNLU';
 
         let isTyping = false;
         let rentalData = {
-            finalPrice: null,
-            houseType: null,
+            price: null,
             location: null,
-            deposit: null,
+            houseType: null,
+            bedrooms: null,
             utilities: null,
             pets: null,
+            deposit: null,
             parking: null,
             firstLastMonth: null,
             contract: null
         };
         let priceHistory = [];
-        let negotiationCompleted = false;
 
         function populateSearchSummary() {
             try {
@@ -133,18 +133,17 @@
                     return;
                 }
 
-                const textMessage = `I'm looking for a ${searchData.roomType} in ${searchData.location} for $${searchData.price}/month${searchData.size ? `, ${searchData.size} sq ft` : ''}${searchData.bedrooms ? `, ${searchData.bedrooms} bedrooms` : ''}${searchData.amenities ? ` with ${searchData.amenities}` : ''}. Can you help me negotiate the best deal?`;
-
-                console.log('populateSearchSummary: Setting textMessage', textMessage);
-                appendMessage('User', textMessage, 'right');
-                appendMessage('AI', 'Got it! I can help with negotiation tips for this rental. Try offering 5-10% below the listed price to start. Would you like specific phrasing for your offer?', 'left');
-                negotiationCompleted = true;
-
-                // Pre-fill rental data from roomData
-                rentalData.finalPrice = searchData.price;
+                // Store data in rentalData
+                rentalData.price = searchData.price;
                 priceHistory.push(searchData.price);
                 rentalData.houseType = searchData.roomType;
                 rentalData.location = searchData.location;
+                rentalData.bedrooms = searchData.bedrooms || null;
+                rentalData.utilities = searchData.amenities && searchData.amenities.includes('Utilities') ? 'Included' : null;
+                rentalData.pets = searchData.amenities && searchData.amenities.includes('Pet friendly') ? 'Allowed' : null;
+
+                // Display summary
+                displayRentalSummary();
             } catch (error) {
                 console.error('populateSearchSummary: General error', error);
                 appendMessage('AI', 'Error loading search details. Please provide the rental details manually.', 'left');
@@ -169,6 +168,11 @@
         }
 
         function autocorrectInput(input) {
+            // Skip autocorrect for monetary values to prevent altering $2000
+            if (input.match(/\$[\d,]+/)) {
+                console.log('autocorrectInput: Skipping autocorrect for monetary value:', input);
+                return input;
+            }
             const words = input.split(' ');
             const correctedWords = words.map(word => {
                 if (typo.check(word)) return word;
@@ -183,25 +187,32 @@
             console.log('Original:', message, 'Corrected:', correctedMessage);
 
             try {
+                if (!WIT_AI_TOKEN || WIT_AI_TOKEN === 'YOUR_WIT_AI_CLIENT_ACCESS_TOKEN') {
+                    throw new Error('Wit.ai client access token is missing or invalid. Please provide a valid token.');
+                }
+
                 const response = await fetch(`https://api.wit.ai/message?v=20250512&q=${encodeURIComponent(correctedMessage)}`, {
                     headers: {
                         'Authorization': `Bearer ${WIT_AI_TOKEN}`
                     }
                 });
+
                 if (!response.ok) {
-                    throw new Error(`Wit.ai API error: ${response.statusText}`);
+                    throw new Error(`Wit.ai API error: ${response.status} ${response.statusText}`);
                 }
+
                 const data = await response.json();
-                console.log('Wit.ai response:', data);
+                console.log('Wit.ai response:', JSON.stringify(data, null, 2));
 
                 // Reset rentalData
                 rentalData = {
-                    finalPrice: null,
-                    houseType: null,
+                    price: null,
                     location: null,
-                    deposit: null,
+                    houseType: null,
+                    bedrooms: null,
                     utilities: null,
                     pets: null,
+                    deposit: null,
                     parking: null,
                     firstLastMonth: null,
                     contract: null
@@ -209,80 +220,144 @@
 
                 // Extract entities from Wit.ai response
                 const entities = data.entities || {};
+                let validationErrors = [];
 
-                // Price (assuming wit/amount_of_money entity)
+                // Price (wit$amount_of_money:amount_of_money)
                 if (entities['wit$amount_of_money:amount_of_money']) {
-                    rentalData.finalPrice = entities['wit$amount_of_money:amount_of_money'][0].value;
-                    priceHistory.push(rentalData.finalPrice);
+                    const priceEntity = entities['wit$amount_of_money:amount_of_money'][0];
+                    rentalData.price = Number(priceEntity.value); // Ensure numerical value
+                    console.log('Extracted price:', rentalData.price, 'from entity:', priceEntity);
+                    if (rentalData.price < 100) {
+                        validationErrors.push(`Price ($${rentalData.price}/month) seems unusually low. Did you mean a higher amount (e.g., $2000)?`);
+                    }
+                    priceHistory.push(rentalData.price);
                 }
 
-                // House Type (custom entity: house_type)
-                if (entities['house_type:house_type']) {
-                    rentalData.houseType = entities['house_type:house_type'][0].value;
+                // Location (wit$location:specific_area)
+                if (entities['wit$location:specific_area']) {
+                    rentalData.location = entities['wit$location:specific_area'][0].value;
                 }
 
-                // Location (wit/location)
-                if (entities['wit$location:location']) {
-                    rentalData.location = entities['wit$location:location'][0].value;
+                // House Type (property_type:specific_type)
+                if (entities['property_type:specific_type']) {
+                    rentalData.houseType = entities['property_type:specific_type'][0].value;
                 }
 
-                // Deposit (wit/amount_of_money with role: deposit)
+                // Bedrooms (bedrooms:minimum_required)
+                if (entities['bedrooms:minimum_required']) {
+                    rentalData.bedrooms = entities['bedrooms:minimum_required'][0].value;
+                    if (!/^\d+$/.test(rentalData.bedrooms) && !rentalData.bedrooms.includes('at least')) {
+                        validationErrors.push(`Bedrooms (${rentalData.bedrooms}) seems unclear. Please specify a number (e.g., "2").`);
+                    }
+                }
+
+                // Utilities (utilities:included_or_not)
+                if (entities['utilities:included_or_not']) {
+                    rentalData.utilities = entities['utilities:included_or_not'][0].value === 'included' ? 'Included' : 'Not included';
+                }
+
+                // Pets (amenities:pet_policy)
+                if (entities['amenities:pet_policy']) {
+                    rentalData.pets = entities['amenities:pet_policy'][0].value === 'pet friendly' ? 'Allowed' : 'Not allowed';
+                }
+
+                // Deposit (wit$amount_of_money:deposit)
                 if (entities['wit$amount_of_money:deposit']) {
-                    rentalData.deposit = entities['wit$amount_of_money:deposit'][0].value;
+                    rentalData.deposit = Number(entities['wit$amount_of_money:deposit'][0].value);
                 }
 
-                // Utilities (custom entity: utilities)
-                if (entities['utilities:utilities']) {
-                    rentalData.utilities = entities['utilities:utilities'][0].value === 'included' ? 'Included' : 'Not included';
-                }
-
-                // Pets (custom entity: pets)
-                if (entities['pets:pets']) {
-                    rentalData.pets = entities['pets:pets'][0].value === 'allowed' ? 'Allowed' : 'Not allowed';
-                }
-
-                // Parking (custom entity: parking)
+                // Parking (parking:parking)
                 if (entities['parking:parking']) {
                     rentalData.parking = entities['parking:parking'][0].value === 'available' ? 'Available' : 'Not available';
                 }
 
-                // First/Last Month’s Rent (custom entity: first_last_month)
+                // First/Last Month’s Rent (first_last_month:first_last_month)
                 if (entities['first_last_month:first_last_month']) {
                     rentalData.firstLastMonth = entities['first_last_month:first_last_month'][0].value === 'required' ? 'Required' : 'Not required';
                 }
 
-                // Contract (custom entity: contract)
+                // Contract (contract:contract)
                 if (entities['contract:contract']) {
                     rentalData.contract = entities['contract:contract'][0].value === 'required' ? 'Required' : 'Not required';
                 }
 
-                // Check if any data was extracted
-                if (Object.values(rentalData).every(val => val === null)) {
-                    appendMessage('AI', 'I couldn’t understand the rental details. Please provide details like price, location, house type, etc.', 'left');
+                // Display summary of extracted entities
+                let summaryMessage = 'Here’s what I understood from your message:';
+                let entitiesExtracted = false;
+
+                if (entities['wit$amount_of_money:amount_of_money']) {
+                    summaryMessage += ` - Price: $${rentalData.price}/month (Confidence: ${entities['wit$amount_of_money:amount_of_money'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['wit$location:specific_area']) {
+                    summaryMessage += ` - Location: ${rentalData.location} (Confidence: ${entities['wit$location:specific_area'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['property_type:specific_type']) {
+                    summaryMessage += ` - House Type: ${rentalData.houseType} (Confidence: ${entities['property_type:specific_type'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['bedrooms:minimum_required']) {
+                    summaryMessage += ` - Bedrooms: ${rentalData.bedrooms} (Confidence: ${entities['bedrooms:minimum_required'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['utilities:included_or_not']) {
+                    summaryMessage += ` - Utilities: ${rentalData.utilities} (Confidence: ${entities['utilities:included_or_not'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['amenities:pet_policy']) {
+                    summaryMessage += ` - Pets: ${rentalData.pets} (Confidence: ${entities['amenities:pet_policy'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['wit$amount_of_money:deposit']) {
+                    summaryMessage += ` - Deposit: $${rentalData.deposit} (Confidence: ${entities['wit$amount_of_money:deposit'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['parking:parking']) {
+                    summaryMessage += ` - Parking: ${rentalData.parking} (Confidence: ${entities['parking:parking'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['first_last_month:first_last_month']) {
+                    summaryMessage += ` - First/Last Month’s Rent: ${rentalData.firstLastMonth} (Confidence: ${entities['first_last_month:first_last_month'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+                if (entities['contract:contract']) {
+                    summaryMessage += ` - Contract: ${rentalData.contract} (Confidence: ${entities['contract:contract'][0].confidence})`;
+                    entitiesExtracted = true;
+                }
+
+                if (!entitiesExtracted) {
+                    appendMessage('AI', 'I couldn’t understand any rental details. Please provide details like price, location, house type, bedrooms, utilities, pets, etc.', 'left');
                     return;
                 }
 
-                // Display summary
-                displayRentalSummary();
+                // Add validation warnings if any
+                if (validationErrors.length > 0) {
+                    summaryMessage += '\n\nWarnings:\n' + validationErrors.join('\n');
+                }
+
+                summaryMessage += '\nPlease confirm if this is correct or provide additional details.';
+                appendMessage('AI', summaryMessage, 'left');
             } catch (error) {
-                console.error('Error processing Wit.ai response:', error);
-                appendMessage('AI', 'Sorry, something went wrong while processing your input. Please try again.', 'left');
+                console.error('Error processing Wit.ai response:', error.message);
+                appendMessage('AI', `Sorry, something went wrong: ${error.message}. Please check your Wit.ai token or try again.`, 'left');
             }
         }
 
         function displayRentalSummary() {
-            let summary = 'Here’s a summary of the rental details you provided:\n';
-            summary += rentalData.finalPrice ? `- Final Price: $${rentalData.finalPrice}/month\n` : '- Final Price: Not provided\n';
-            summary += rentalData.houseType ? `- House Type: ${rentalData.houseType}\n` : '- House Type: Not provided\n';
-            summary += rentalData.location ? `- Location: ${rentalData.location}\n` : '- Location: Not provided\n';
-            summary += rentalData.deposit ? `- Deposit: $${rentalData.deposit}\n` : '- Deposit: Not provided\n';
-            summary += rentalData.utilities ? `- Utilities: ${rentalData.utilities}\n` : '- Utilities: Not provided\n';
-            summary += rentalData.pets ? `- Pets: ${rentalData.pets}\n` : '- Pets: Not provided\n';
-            summary += rentalData.parking ? `- Parking: ${rentalData.parking}\n` : '- Parking: Not provided\n';
-            summary += rentalData.firstLastMonth ? `- First/Last Month’s Rent: ${rentalData.firstLastMonth}\n` : '- First/Last Month’s Rent: Not provided\n';
-            summary += rentalData.contract ? `- Contract: ${rentalData.contract}\n` : '- Contract: Not provided\n';
-            summary += 'Would you like to negotiate this rental or provide new details?';
-            appendMessage('AI', summary.replace(/\n/g, ' '), 'left');
+            let summary = 'Current rental details:';
+            summary += rentalData.price ? ` - Price: $${rentalData.price}/month` : ' - Price: Not provided';
+            summary += rentalData.location ? ` - Location: ${rentalData.location}` : ' - Location: Not provided';
+            summary += rentalData.houseType ? ` - House Type: ${rentalData.houseType}` : ' - House Type: Not provided';
+            summary += rentalData.bedrooms ? ` - Bedrooms: ${rentalData.bedrooms}` : ' - Bedrooms: Not provided';
+            summary += rentalData.utilities ? ` - Utilities: ${rentalData.utilities}` : ' - Utilities: Not provided';
+            summary += rentalData.pets ? ` - Pets: ${rentalData.pets}` : ' - Pets: Not provided';
+            summary += rentalData.deposit ? ` - Deposit: $${rentalData.deposit}` : ' - Deposit: Not provided';
+            summary += rentalData.parking ? ` - Parking: ${rentalData.parking}` : ' - Parking: Not provided';
+            summary += rentalData.firstLastMonth ? ` - First/Last Month’s Rent: ${rentalData.firstLastMonth}` : ' - First/Last Month’s Rent: Not provided';
+            summary += rentalData.contract ? ` - Contract: ${rentalData.contract}` : ' - Contract: Not provided';
+            summary += ' Please confirm if this is correct or provide additional details.';
+            appendMessage('AI', summary, 'left');
         }
 
         async function sendChatMessage() {
@@ -294,49 +369,18 @@
             removeTypingIndicator();
             isTyping = false;
             appendMessage('User', message, 'right');
+            input.value = ''; // Clear input field
 
-            // Handle negotiation or post-summary actions
-            const lowerMessage = message.toLowerCase();
-            if (negotiationCompleted || lowerMessage.includes('negotiate') || lowerMessage.includes('price') || lowerMessage.includes('deal')) {
-                if (lowerMessage.includes('phrasing') || lowerMessage.includes('offer')) {
-                    let offerPrice = rentalData.finalPrice ? Math.round(rentalData.finalPrice * 0.9) : 'a lower price';
-                    let roomType = rentalData.houseType || 'rental';
-                    let location = rentalData.location || 'the location';
-                    appendMessage('AI', `Here’s a sample offer: "Hi, I’m interested in the ${roomType} in ${location}. Would you consider $${offerPrice} per month? I’m a reliable tenant with good credit." Adjust as needed!`, 'left');
-                } else {
-                    appendMessage('AI', 'To negotiate a better deal, try offering 5-10% below the listed price and highlight your reliability as a tenant. Would you like specific phrasing for your offer?', 'left');
-                }
-            } else if (lowerMessage.includes('amenities') || lowerMessage.includes('utilities')) {
-                appendMessage('AI', 'Ask the landlord if utilities or amenities like parking can be included in the rent to reduce your costs. Want me to draft a sample question?', 'left');
-            } else if (lowerMessage.includes('new details')) {
-                appendMessage('AI', 'Sure, please provide new rental details, such as price, location, house type, deposit, utilities, pets, parking, first/last month’s rent, and contract.', 'left');
-                negotiationCompleted = false;
-            } else {
-                // Process input with Wit.ai to extract rental details
-                await processWitResponse(message);
-            }
-
-            input.value = '';
+            // Process message with Wit.ai for entity extraction
+            appendMessage('AI', 'Processing your request...', 'left', true);
+            await processWitResponse(message);
+            removeTypingIndicator();
         }
 
-        document.getElementById('chatInput').addEventListener('input', (e) => {
-            const input = e.target.value.trim();
-            if (input && !isTyping) {
-                isTyping = true;
-                appendMessage('User', 'User is typing...', 'right', true);
-            } else if (!input && isTyping) {
-                removeTypingIndicator();
-                isTyping = false;
-            }
-        });
-
-        document.getElementById('chatInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendChatMessage();
-            }
-        });
-
-        document.addEventListener('DOMContentLoaded', populateSearchSummary);
+        // Initialize by checking for URL parameters
+        window.onload = function() {
+            populateSearchSummary();
+        };
     </script>
 </body>
 </html>
