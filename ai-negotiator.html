@@ -26,10 +26,9 @@
             background: #555;
         }
         .typing-indicator {
-            color: #6b7280; /* gray-500 */
+            color: #6b7280;
             font-style: italic;
         }
-        /* Fallback styles in case Tailwind fails */
         body {
             font-family: Arial, sans-serif;
             background-color: #f7fafc;
@@ -89,7 +88,6 @@
     </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
-    <!-- Header -->
     <header class="sticky top-0 bg-white shadow-md z-10">
         <nav class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-6">
@@ -102,8 +100,6 @@
             </div>
         </nav>
     </header>
-
-    <!-- Main Content -->
     <main class="flex-grow w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-12">
         <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
             <h2 class="text-3xl font-bold text-gray-800 mb-6 text-center">AI Negotiator</h2>
@@ -113,7 +109,7 @@
                     <h3 class="text-lg font-semibold">AI Negotiator Assistant</h3>
                 </div>
                 <div id="chatMessages" class="p-4">
-                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental. Please provide details about the rental, such as price, location, house type, bedrooms, utilities, pets, deposit, parking, first/last month’s rent, and contract.</p>
+                    <p class="text-gray-600">Hello! I'm here to help you negotiate your rental. Please provide details like price, bedrooms, and house type, and let me know if you can negotiate.</p>
                 </div>
                 <div class="p-4 border-t border-gray-200">
                     <input id="chatInput" type="text" class="w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="Type your message...">
@@ -122,8 +118,6 @@
             </div>
         </section>
     </main>
-
-    <!-- Footer -->
     <footer class="bg-gray-800 text-white py-8">
         <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <p class="text-sm">© 2025 Room Finder. All rights reserved.</p>
@@ -136,9 +130,8 @@
             </div>
         </div>
     </footer>
-
     <script>
-        // Initialize Typo.js for autocorrect with a fallback
+        // Initialize Typo.js for autocorrect
         let typo = null;
         if (typeof Typo !== 'undefined') {
             try {
@@ -154,9 +147,12 @@
             console.warn('Typo.js library not loaded. Autocorrect will be disabled.');
         }
 
-        // Wit.ai client access token
+        // API configurations
         const WIT_AI_TOKEN = 'LZNNBHEOSZBZG7IPS6ZOPWCR6WQF3LUL';
+        const OPENAI_API_KEY = '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';
+        const OPENAI_MODEL = 'gpt-3.5-turbo';
 
+        // State variables
         let isTyping = false;
         let rentalData = {
             price: null,
@@ -171,129 +167,16 @@
             contract: null
         };
         let priceHistory = [];
-        let marketplaceListing = null;
         let negotiationState = 'idle'; // idle, offered, finalized
-        let lastOffer = null; // Track the last offer made
+        let lastOffer = null;
+        let conversationHistory = [];
+        let lastMessageTime = 0; // Track last message timestamp for debouncing
 
-        // Mock function to parse Marketplace listing
-        function parseMarketplaceListing(url) {
-            if (url === 'https://www.facebook.com/marketplace/item/1988489131909148') {
-                return {
-                    title: '2 Bedroom Apartment in Downtown Toronto',
-                    price: 2000,
-                    location: 'Toronto, ON',
-                    houseType: 'Apartment',
-                    bedrooms: '2',
-                    description: 'Cozy 2 bedroom apartment available for rent in downtown Toronto. Utilities included, pet-friendly.'
-                };
-            }
-            return null;
-        }
-
-        function populateSearchSummary() {
-            console.log('populateSearchSummary: Starting');
-            try {
-                const urlParams = new URLSearchParams(window.location.search);
-                const roomData = urlParams.get('roomData');
-                const marketplaceUrl = urlParams.get('marketplaceUrl');
-                console.log('populateSearchSummary: Received roomData', roomData, 'marketplaceUrl', marketplaceUrl);
-
-                if (marketplaceUrl) {
-                    marketplaceListing = parseMarketplaceListing(marketplaceUrl);
-                    if (marketplaceListing) {
-                        rentalData.price = marketplaceListing.price;
-                        priceHistory.push(marketplaceListing.price);
-                        rentalData.location = marketplaceListing.location;
-                        rentalData.houseType = marketplaceListing.houseType;
-                        rentalData.bedrooms = marketplaceListing.bedrooms;
-                        rentalData.utilities = marketplaceListing.description.includes('Utilities included') ? 'Included' : 'Not included';
-                        rentalData.pets = marketplaceListing.description.includes('pet-friendly') ? 'Allowed' : 'Not allowed';
-
-                        let summary = `Found Marketplace listing: ${marketplaceListing.title}\n`;
-                        summary += `- Price: $${marketplaceListing.price}/month\n`;
-                        summary += `- Location: ${marketplaceListing.location}\n`;
-                        summary += `- Type: ${marketplaceListing.houseType}\n`;
-                        summary += `- Bedrooms: ${marketplaceListing.bedrooms}\n`;
-                        summary += `- Utilities: ${rentalData.utilities}\n`;
-                        summary += `- Pets: ${rentalData.pets}\n`;
-                        summary += `Suggested message: "Hey, I’m from RoomFinder, I wanna rent."\n`;
-                        summary += `Use the buttons below to copy the message and visit the listing to send it via Facebook Messenger. Would you like negotiation tips?`;
-                        appendMessage('AI', summary, 'left');
-
-                        document.getElementById('chatInput').value = 'Hey, I’m from RoomFinder, I wanna rent';
-                        addActionButtons(marketplaceUrl);
-                    } else {
-                        appendMessage('AI', 'Could not fetch listing details. Please provide details manually.', 'left');
-                    }
-                } else if (roomData) {
-                    let searchData;
-                    try {
-                        searchData = JSON.parse(decodeURIComponent(roomData));
-                        console.log('populateSearchSummary: Parsed searchData', searchData);
-                    } catch (parseError) {
-                        console.error('populateSearchSummary: Error parsing roomData', parseError);
-                        appendMessage('AI', 'Invalid search details format. Please provide the rental details manually.', 'left');
-                        return;
-                    }
-
-                    if (!searchData.location || !searchData.roomType || !searchData.price) {
-                        console.warn('populateSearchSummary: Missing required fields', searchData);
-                        appendMessage('AI', 'Incomplete search details. Please provide the rental details manually.', 'left');
-                        return;
-                    }
-
-                    rentalData.price = searchData.price;
-                    priceHistory.push(searchData.price);
-                    rentalData.houseType = searchData.roomType;
-                    rentalData.location = searchData.location;
-                    rentalData.bedrooms = searchData.bedrooms || null;
-                    rentalData.utilities = searchData.amenities && searchData.amenities.includes('Utilities') ? 'Included' : null;
-                    rentalData.pets = searchData.amenities && searchData.amenities.includes('Pet friendly') ? 'Allowed' : null;
-
-                    displayRentalSummary();
-                } else {
-                    appendMessage('AI', 'No search details provided. Please provide the rental details manually.', 'left');
-                }
-            } catch (error) {
-                console.error('populateSearchSummary: General error', error);
-                appendMessage('AI', 'Error loading search details. Please provide the rental details manually.', 'left');
-            }
-        }
-
-        function addActionButtons(marketplaceUrl) {
-            const chatContainer = document.querySelector('#chatMessages');
-            if (!chatContainer) {
-                console.error('Error: #chatMessages element not found for adding action buttons');
-                return;
-            }
-            const buttonContainer = document.createElement('div');
-            buttonContainer.className = 'flex space-x-4 mt-4';
-            
-            const copyButton = document.createElement('button');
-            copyButton.className = 'bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition';
-            copyButton.textContent = 'Copy Message';
-            copyButton.onclick = () => {
-                navigator.clipboard.writeText('Hey, I’m from RoomFinder, I wanna rent');
-                appendMessage('AI', 'Message copied to clipboard!', 'left');
-            };
-
-            const visitButton = document.createElement('button');
-            visitButton.className = 'bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition';
-            visitButton.textContent = 'Visit Listing';
-            visitButton.onclick = () => {
-                window.open(marketplaceUrl, '_blank');
-                appendMessage('AI', 'Opened listing in a new tab. Paste the message in Facebook Messenger.', 'left');
-            };
-
-            buttonContainer.appendChild(copyButton);
-            buttonContainer.appendChild(visitButton);
-            chatContainer.appendChild(buttonContainer);
-        }
-
+        // Append message to chat and update history
         function appendMessage(sender, message, align, isTypingIndicator = false) {
             const messages = document.getElementById('chatMessages');
             if (!messages) {
-                console.error('Error: #chatMessages element not found in the DOM');
+                console.error('Error: #chatMessages element not found');
                 return;
             }
             const messageElement = document.createElement('p');
@@ -302,22 +185,23 @@
             messageElement.id = isTypingIndicator ? 'typing-indicator' : '';
             messages.appendChild(messageElement);
             messages.scrollTop = messages.scrollHeight;
+            if (!isTypingIndicator) conversationHistory.push({ role: sender.toLowerCase(), content: message });
         }
 
+        // Remove typing indicator
         function removeTypingIndicator() {
             const typingIndicator = document.getElementById('typing-indicator');
-            if (typingIndicator) {
-                typingIndicator.remove();
-            }
+            if (typingIndicator) typingIndicator.remove();
         }
 
+        // Autocorrect user input
         function autocorrectInput(input) {
             if (!typo) {
                 console.log('Autocorrect disabled: Typo.js not available');
-                return input; // Skip autocorrect if Typo.js isn't loaded
+                return input;
             }
             if (input.match(/\$[\d,]+/)) {
-                console.log('autocorrectInput: Skipping autocorrect for monetary value:', input);
+                console.log('Skipping autocorrect for monetary value:', input);
                 return input;
             }
             const words = input.split(' ');
@@ -329,15 +213,26 @@
             return correctedWords.join(' ');
         }
 
-        async function processWitResponse(message, isLandlord = false) {
+        // Delay function for retry mechanism
+        function delay(ms) {
+            return new Promise(resolve => setTimeout(resolve, ms));
+        }
+
+        // Step 1: Parse user message with Wit.ai
+        async function parseWithWitAI(message, retryCount = 0) {
             const correctedMessage = autocorrectInput(message);
-            console.log('Original:', message, 'Corrected:', correctedMessage);
+            appendMessage('User', correctedMessage, 'right');
+            appendMessage('AI', 'Processing your request...', 'left', true);
+
+            const now = Date.now();
+            if (now - lastMessageTime < 5000) { // Debounce: 5 seconds
+                removeTypingIndicator();
+                appendMessage('AI', 'Please wait 5 seconds before sending another message.', 'left');
+                return;
+            }
+            lastMessageTime = now;
 
             try {
-                if (!WIT_AI_TOKEN || WIT_AI_TOKEN === 'YOUR_WIT_AI_CLIENT_ACCESS_TOKEN') {
-                    throw new Error('Wit.ai client access token is missing or invalid. Please provide a valid token.');
-                }
-
                 const response = await fetch(`https://api.wit.ai/message?v=20250512&q=${encodeURIComponent(correctedMessage)}`, {
                     headers: {
                         'Authorization': `Bearer ${WIT_AI_TOKEN}`
@@ -345,191 +240,140 @@
                 });
 
                 if (!response.ok) {
+                    if (response.status === 429 && retryCount < 3) {
+                        const waitTime = Math.pow(2, retryCount + 1) * 1000; // 2s, 4s, 8s
+                        appendMessage('AI', `Wit.ai rate limit hit, retrying in ${waitTime/1000} seconds...`, 'left', true);
+                        await delay(waitTime);
+                        return parseWithWitAI(message, retryCount + 1);
+                    }
                     throw new Error(`Wit.ai API error: ${response.status} ${response.statusText}`);
                 }
 
                 const data = await response.json();
-                console.log('Wit.ai response:', JSON.stringify(data, null, 2));
-
                 const entities = data.entities || {};
                 let intent = data.intents && data.intents.length > 0 ? data.intents[0].name : null;
-                let validationErrors = [];
 
                 // Extract entities
                 if (entities['wit$amount_of_money:amount_of_money']) {
                     const priceEntity = entities['wit$amount_of_money:amount_of_money'].find(e => e.role === 'price') || entities['wit$amount_of_money:amount_of_money'][0];
                     rentalData.price = Number(priceEntity.value);
-                    console.log('Extracted price:', rentalData.price, 'from entity:', priceEntity);
-                    if (rentalData.price < 100) {
-                        validationErrors.push(`Price ($${rentalData.price}/month) seems unusually low. Did you mean a higher amount (e.g., $2000)?`);
-                    }
                     priceHistory.push(rentalData.price);
                 }
-
                 if (entities['wit$location:location']) {
                     rentalData.location = entities['wit$location:location'][0].value;
                 }
-
                 if (entities['property_type:house_type']) {
                     rentalData.houseType = entities['property_type:house_type'][0].value;
+                } else if (correctedMessage.toLowerCase().includes('condo') || correctedMessage.toLowerCase().includes('apartment')) {
+                    rentalData.houseType = correctedMessage.toLowerCase().includes('condo') ? 'Condo' : 'Apartment';
                 }
-
                 if (entities['bedrooms:bedrooms']) {
-                    const bedroomsEntity = entities['bedrooms:bedrooms'][0];
-                    const bedroomsCount = bedroomsEntity.entities['wit$amount_of_money:amount_of_money']?.find(e => e.role === 'bedrooms_count');
-                    rentalData.bedrooms = bedroomsCount ? bedroomsCount.value : bedroomsEntity.value;
-                    if (!/^\d+$/.test(rentalData.bedrooms)) {
-                        validationErrors.push(`Bedrooms (${rentalData.bedrooms}) seems unclear. Please specify a number (e.g., "2").`);
-                    }
+                    rentalData.bedrooms = entities['bedrooms:bedrooms'][0].value;
                 }
-
                 if (entities['utilities:utilities']) {
                     rentalData.utilities = entities['utilities:utilities'][0].value === 'included' ? 'Included' : 'Not included';
                 }
-
                 if (entities['pet_policy:pets']) {
                     rentalData.pets = entities['pet_policy:pets'][0].value === 'allowed' ? 'Allowed' : 'Not allowed';
                 }
-
                 if (entities['wit$amount_of_money:deposit']) {
                     rentalData.deposit = Number(entities['wit$amount_of_money:deposit'][0].value);
                 }
-
                 if (entities['parking:parking']) {
                     rentalData.parking = entities['parking:parking'][0].value === 'available' ? 'Available' : 'Not available';
                 }
-
                 if (entities['first_last_month:first_last_month']) {
                     rentalData.firstLastMonth = entities['first_last_month:first_last_month'][0].value === 'required' ? 'Required' : 'Not required';
                 }
-
                 if (entities['contract:contract']) {
                     rentalData.contract = entities['contract:contract'][0].value === 'required' ? 'Required' : 'Not required';
                 }
 
-                // Handle intents
-                if (intent === 'request_negotiation' || (correctedMessage.toLowerCase() === 'yes' && negotiationState === 'idle')) {
-                    if (!rentalData.price) {
-                        appendMessage('AI', 'I understood this is a negotiation opportunity, but I don’t have the price. Please provide the price (e.g., "$2000").', 'left');
-                        return;
-                    }
-                    const currentPrice = rentalData.price;
-                    const newOffer = Math.round(currentPrice * 0.95); // 5% lower
-                    lastOffer = newOffer;
-                    negotiationState = 'offered';
-                    appendMessage('AI', `The landlord is open to negotiation. The current price is $${currentPrice}/month. I suggest offering $${newOffer}/month. You can say: "Can you do $${newOffer}?"`, 'left');
-                    return;
-                }
-
-                if (intent === 'provide_rental_details' || (correctedMessage.toLowerCase() === 'yes' && negotiationState !== 'offered')) {
-                    let summaryMessage = 'Rental details provided:';
-                    let entitiesExtracted = false;
-
-                    if (rentalData.price) {
-                        summaryMessage += ` - Price: $${rentalData.price}/month`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.location) {
-                        summaryMessage += ` - Location: ${rentalData.location}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.houseType) {
-                        summaryMessage += ` - House Type: ${rentalData.houseType}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.bedrooms) {
-                        summaryMessage += ` - Bedrooms: ${rentalData.bedrooms}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.utilities) {
-                        summaryMessage += ` - Utilities: ${rentalData.utilities}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.pets) {
-                        summaryMessage += ` - Pets: ${rentalData.pets}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.deposit) {
-                        summaryMessage += ` - Deposit: $${rentalData.deposit}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.parking) {
-                        summaryMessage += ` - Parking: ${rentalData.parking}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.firstLastMonth) {
-                        summaryMessage += ` - First/Last Month’s Rent: ${rentalData.firstLastMonth}`;
-                        entitiesExtracted = true;
-                    }
-                    if (rentalData.contract) {
-                        summaryMessage += ` - Contract: ${rentalData.contract}`;
-                        entitiesExtracted = true;
-                    }
-
-                    if (!entitiesExtracted) {
-                        appendMessage('AI', 'I couldn’t understand any rental details. Please provide details like price, house type, bedrooms, etc.', 'left');
-                        return;
-                    }
-
-                    if (negotiationState === 'offered') {
-                        negotiationState = 'finalized';
-                        summaryMessage += `\n\nThis seems to be the landlord's final price after negotiation: $${rentalData.price}/month. Would you like to proceed with this price or negotiate further?`;
-                    } else {
-                        summaryMessage += '\nPlease confirm if this is correct or provide additional details.';
-                    }
-
-                    if (validationErrors.length > 0) {
-                        summaryMessage += '\n\nWarnings:\n' + validationErrors.join('\n');
-                    }
-
-                    appendMessage('AI', summaryMessage, 'left');
-                    return;
-                }
-
-                // Handle landlord response after an offer
-                if (negotiationState === 'offered' && correctedMessage.toLowerCase().includes(`can you do $${lastOffer}`)) {
-                    // Simulate landlord agreeing to the offer
-                    appendMessage('AI', `Since you (the landlord) asked "Can you do $${lastOffer}?", I'll assume you're agreeing to the offer as a test. Let's say I (the landlord) respond: "Yes, I can do $${lastOffer} for the ${rentalData.bedrooms}-bedroom ${rentalData.houseType}."`, 'left');
-                    await processWitResponse(`Yes, I can do $${lastOffer} for the ${rentalData.bedrooms}-bedroom ${rentalData.houseType}.`, true);
-                    return;
-                }
-
-                if (negotiationState === 'offered') {
-                    // Treat any other response as a new price or rejection
-                    if (entities['wit$amount_of_money:amount_of_money']) {
-                        negotiationState = 'finalized';
-                        appendMessage('AI', `Rental details provided: - Price: $${rentalData.price}/month - House Type: ${rentalData.houseType} - Bedrooms: ${rentalData.bedrooms}\n\nThis seems to be the landlord's final price after negotiation: $${rentalData.price}/month. Would you like to proceed with this price or negotiate further?`, 'left');
-                        return;
-                    } else {
-                        appendMessage('AI', 'I’ve already made an offer of $' + lastOffer + '/month. Please respond with the final price or let me know if you’re open to further negotiation.', 'left');
-                        return;
-                    }
-                }
-
-                // Fallback if no intent or unrecognized intent
-                appendMessage('AI', 'I couldn’t understand the intent of your message. Please provide rental details or indicate if the landlord is open to negotiation.', 'left');
+                // Pass to OpenAI for negotiation
+                await negotiateWithOpenAI(correctedMessage, intent);
             } catch (error) {
-                console.error('Error processing Wit.ai response:', error.message);
-                appendMessage('AI', `Sorry, something went wrong: ${error.message}. Please check your Wit.ai token or try again.`, 'left');
+                console.error('Wit.ai API error:', error.message);
+                removeTypingIndicator();
+                appendMessage('AI', `Sorry, an error occurred with Wit.ai: ${error.message}. Please try again.`, 'left');
             }
         }
 
-        function displayRentalSummary() {
-            let summary = 'Current rental details:';
-            summary += rentalData.price ? ` - Price: $${rentalData.price}/month` : ' - Price: Not provided';
-            summary += rentalData.location ? ` - Location: ${rentalData.location}` : ' - Location: Not provided';
-            summary += rentalData.houseType ? ` - House Type: ${rentalData.houseType}` : ' - House Type: Not provided';
-            summary += rentalData.bedrooms ? ` - Bedrooms: ${rentalData.bedrooms}` : ' - Bedrooms: Not provided';
-            summary += rentalData.utilities ? ` - Utilities: ${rentalData.utilities}` : ' - Utilities: Not provided';
-            summary += rentalData.pets ? ` - Pets: ${rentalData.pets}` : ' - Pets: Not provided';
-            summary += rentalData.deposit ? ` - Deposit: $${rentalData.deposit}` : ' - Deposit: Not provided';
-            summary += rentalData.parking ? ` - Parking: ${rentalData.parking}` : ' - Parking: Not provided';
-            summary += rentalData.firstLastMonth ? ` - First/Last Month’s Rent: ${rentalData.firstLastMonth}` : ' - First/Last Month’s Rent: Not provided';
-            summary += rentalData.contract ? ` - Contract: ${rentalData.contract}` : ' - Contract: Not provided';
-            summary += ' Please confirm if this is correct or provide additional details.';
-            appendMessage('AI', summary, 'left');
+        // Step 2: Negotiate with OpenAI
+        async function negotiateWithOpenAI(message, intent, retryCount = 0) {
+            const prompt = `
+            You are an AI negotiator assisting a user in renting a property. Use the parsed rental details and manage the negotiation. Current state:
+            - Negotiation state: ${negotiationState}
+            - Rental data: ${JSON.stringify(rentalData)}
+            - Price history: ${priceHistory.join(', ')}
+            - Last offer: $${lastOffer || 'none'}
+            - Conversation history: ${conversationHistory.map(msg => `${msg.role}: ${msg.content}`).join('\n')}
+            - Intent: ${intent || 'none'}
+            - User message: ${message}
+
+            ### Instructions:
+            1. Manage negotiation:
+               - If state is 'idle' and intent is 'request_negotiation' or message contains "negotiate", suggest a 5% lower offer and set state to 'offered'.
+               - If state is 'offered' and user/landlord accepts (e.g., "Yes", "Can you do $${lastOffer}?"), finalize with last offer and set state to 'finalized'.
+               - If a new price is offered (e.g., "Can you do $1400?"), update price, set state to 'finalized', and confirm.
+               - If unclear, ask for clarification.
+            2. Respond with "AI:" followed by a concise, conversational message (1-2 sentences).
+            `;
+
+            try {
+                const response = await fetch('https://api.openai.com/v1/chat/completions', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${OPENAI_API_KEY}`
+                    },
+                    body: JSON.stringify({
+                        model: OPENAI_MODEL,
+                        messages: [{ role: 'system', content: prompt }],
+                        max_tokens: 150,
+                        temperature: 0.7
+                    })
+                });
+
+                if (!response.ok) {
+                    if (response.status === 429 && retryCount < 3) {
+                        const waitTime = Math.pow(2, retryCount + 1) * 1000; // 2s, 4s, 8s
+                        appendMessage('AI', `OpenAI rate limit hit, retrying in ${waitTime/1000} seconds...`, 'left', true);
+                        await delay(waitTime);
+                        return negotiateWithOpenAI(message, intent, retryCount + 1);
+                    }
+                    throw new Error(`OpenAI API error: ${response.status} ${response.statusText}`);
+                }
+
+                const data = await response.json();
+                const aiResponse = data.choices[0].message.content.trim();
+                removeTypingIndicator();
+                appendMessage('AI', aiResponse.replace('AI:', '').trim(), 'left');
+
+                // Update state based on OpenAI's response
+                if (negotiationState === 'idle' && (intent === 'request_negotiation' || message.toLowerCase().includes('negotiate')) && rentalData.price) {
+                    lastOffer = Math.round(rentalData.price * 0.95);
+                    negotiationState = 'offered';
+                } else if (negotiationState === 'offered' && (message.toLowerCase().includes('yes') || message.toLowerCase().includes(`can you do $${lastOffer}`))) {
+                    negotiationState = 'finalized';
+                    rentalData.price = lastOffer;
+                    priceHistory.push(lastOffer);
+                } else if (negotiationState === 'offered' && message.match(/\$([\d,]+)/)) {
+                    const newPrice = parseInt(message.match(/\$([\d,]+)/)[1].replace(',', ''));
+                    if (newPrice !== lastOffer) {
+                        rentalData.price = newPrice;
+                        priceHistory.push(newPrice);
+                        lastOffer = newPrice;
+                        negotiationState = 'finalized';
+                    }
+                }
+            } catch (error) {
+                console.error('OpenAI API error:', error.message);
+                removeTypingIndicator();
+                appendMessage('AI', `Sorry, an error occurred with OpenAI: ${error.message}. Please try again or check your OpenAI plan at platform.openai.com.`, 'left');
+            }
         }
 
+        // Send user message to Wit.ai for parsing, then OpenAI for negotiation
         async function sendChatMessage() {
             const input = document.getElementById('chatInput');
             const message = input.value.trim();
@@ -537,18 +381,15 @@
 
             removeTypingIndicator();
             isTyping = false;
-            appendMessage('User', message, 'right');
+            await parseWithWitAI(message);
             input.value = '';
-
-            appendMessage('AI', 'Processing your request...', 'left', true);
-            await processWitResponse(message);
-            removeTypingIndicator();
         }
 
-        window.onload = function() {
-            console.log('Window loaded, calling populateSearchSummary');
-            populateSearchSummary();
-        };
+        // Initialize chat on DOM load
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM loaded at', new Date().toISOString());
+            appendMessage('AI', 'Hello! I\'m here to help you negotiate your rental. Please provide details like price, bedrooms, and house type, and let me know if you can negotiate.', 'left');
+        });
     </script>
 </body>
 </html>
