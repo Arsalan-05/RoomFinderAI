@@ -193,7 +193,12 @@
         // Supabase Configuration
         const SUPABASE_URL = 'https://.supabase.co';
         const SUPABASE_KEY = '..-lMNXNFHs'; // Replace with your Supabase anon key
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+    global: {
+        headers: { 'Content-Type': 'application/json' }
+    }
+});
+
 
         // Initialize Typo.js for autocorrect
         const typo = new Typo('en_US', false, false, {
@@ -420,35 +425,82 @@
 
         async function uploadMedia(files) {
     const uploadedMedia = [];
+
     for (const fileObj of files) {
         const file = fileObj.file;
         const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+        const filePath = fileName; // or "public/" + fileName if you're organizing
+
         try {
             const { error: uploadError } = await supabase.storage
                 .from('listing-media')
-                .upload(fileName, file, {
+                .upload(filePath, file, {
                     cacheControl: '3600',
                     upsert: false
                 });
 
             if (uploadError) throw uploadError;
 
-            const { data: publicData } = supabase.storage
+            const { data } = supabase.storage
                 .from('listing-media')
-                .getPublicUrl(fileName);
+                .getPublicUrl(filePath);
 
             uploadedMedia.push({
                 name: file.name,
                 type: file.type,
-                url: publicData.publicUrl
+                url: data.publicUrl
             });
-        } catch (error) {
-            console.error('Error uploading file:', file.name, error);
-            throw new Error(`Failed to upload ${file.name}`);
+        } catch (err) {
+            console.error('Upload failed for', file.name, err);
+            throw err;
         }
     }
+
     return uploadedMedia;
 }
+
+document.getElementById('listingForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    try {
+        const media = uploadedFiles.length > 0 ? await uploadMedia(uploadedFiles) : [];
+
+        const listing = {
+            title: autocorrectInput(sanitizeInput(document.getElementById('title').value)),
+            price: parseInt(document.getElementById('price').value),
+            location: autocorrectInput(sanitizeInput(document.getElementById('location').value)),
+            house_type: document.getElementById('houseType').value,
+            bedrooms: parseInt(document.getElementById('bedrooms').value),
+            utilities: document.getElementById('utilities').value,
+            description: autocorrectInput(sanitizeInput(document.getElementById('description').value)),
+            media: JSON.stringify(media)
+
+        };
+
+        if (!listing.title || !listing.price || !listing.location || !listing.house_type || !listing.bedrooms) {
+            alert('Please fill in all required fields.');
+            return;
+        }
+
+        const { error } = await supabase.from('listings').insert([listing]);
+
+        if (error) {
+            console.error('Error inserting listing:', error);
+            alert('Failed to add listing.');
+            return;
+        }
+
+        e.target.reset();
+        mediaPreview.innerHTML = '';
+        uploadedFiles = [];
+
+        alert('Listing added successfully!');
+        await displayListings();
+    } catch (err) {
+        console.error('Submission failed:', err);
+        alert('Failed to add listing: ' + err.message);
+    }
+});
 
 
         // Real-time subscription to listings
