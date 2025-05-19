@@ -1,43 +1,4 @@
-<script type="text/javascript">
-        var gk_isXlsx = false;
-        var gk_xlsxFileLookup = {};
-        var gk_fileData = {};
-        function filledCell(cell) {
-          return cell !== '' && cell != null;
-        }
-        function loadFileData(filename) {
-        if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
-            try {
-                var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
-                var firstSheetName = workbook.SheetNames[0];
-                var worksheet = workbook.Sheets[firstSheetName];
-
-                // Convert sheet to JSON to filter blank rows
-                var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
-                // Filter out blank rows (rows where all cells are empty, null, or undefined)
-                var filteredData = jsonData.filter(row => row.some(filledCell));
-
-                // Heuristic to find the header row by ignoring rows with fewer filled cells than the next row
-                var headerRowIndex = filteredData.findIndex((row, index) =>
-                  row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
-                );
-                // Fallback
-                if (headerRowIndex === -1 || headerRowIndex > 25) {
-                  headerRowIndex = 0;
-                }
-
-                // Convert filtered JSON back to CSV
-                var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex)); // Create a new sheet from filtered array of arrays
-                csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
-                return csv;
-            } catch (e) {
-                console.error(e);
-                return "";
-            }
-        }
-        return gk_fileData[filename] || "";
-        }
-        </script><!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -65,6 +26,21 @@
             object-fit: cover;
             margin: 0.5rem;
             border-radius: 0.25rem;
+        }
+        .profile-upload-label {
+            cursor: pointer;
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background-color: #2563eb;
+            color: white;
+            border-radius: 0.25rem;
+            transition: background-color 0.2s ease-in-out;
+        }
+        .profile-upload-label:hover {
+            background-color: #1e40af;
+        }
+        .profile-upload-input {
+            display: none;
         }
     </style>
 </head>
@@ -96,6 +72,8 @@
             <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">User Profile</h2>
             <div class="text-center">
                 <img id="profileImage" src="https://via.placeholder.com/100" alt="Profile" class="w-24 h-24 rounded-full mx-auto mb-4">
+                <label for="profileUpload" class="profile-upload-label mb-4">Upload Profile Photo</label>
+                <input type="file" id="profileUpload" class="profile-upload-input" accept="image/jpeg,image/png">
                 <h3 id="userName" class="text-xl font-semibold text-gray-800"></h3>
                 <p id="userEmail" class="text-gray-600"></p>
                 <button id="logoutButton" class="mt-4 bg-red-600 text-white p-3 rounded-lg hover:bg-red-700 transition font-semibold">Logout</button>
@@ -131,6 +109,37 @@
     </footer>
 
     <script>
+        var gk_isXlsx = false;
+        var gk_xlsxFileLookup = {};
+        var gk_fileData = {};
+        function filledCell(cell) {
+            return cell !== '' && cell != null;
+        }
+        function loadFileData(filename) {
+            if (gk_isXlsx && gk_xlsxFileLookup[filename]) {
+                try {
+                    var workbook = XLSX.read(gk_fileData[filename], { type: 'base64' });
+                    var firstSheetName = workbook.SheetNames[0];
+                    var worksheet = workbook.Sheets[firstSheetName];
+                    var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
+                    var filteredData = jsonData.filter(row => row.some(filledCell));
+                    var headerRowIndex = filteredData.findIndex((row, index) =>
+                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                    );
+                    if (headerRowIndex === -1 || headerRowIndex > 25) {
+                        headerRowIndex = 0;
+                    }
+                    var csv = XLSX.utils.aoa_to_sheet(filteredData.slice(headerRowIndex));
+                    csv = XLSX.utils.sheet_to_csv(csv, { header: 1 });
+                    return csv;
+                } catch (e) {
+                    console.error(e);
+                    return "";
+                }
+            }
+            return gk_fileData[filename] || "";
+        }
+
         document.addEventListener('DOMContentLoaded', () => {
             const currentUser = JSON.parse(localStorage.getItem('currentUser'));
             if (!currentUser) {
@@ -144,9 +153,52 @@
             document.getElementById('userName').textContent = `${currentUser.firstName} ${currentUser.lastName}`;
             document.getElementById('userEmail').textContent = currentUser.email;
 
+            // Profile photo upload
+            const profileUpload = document.getElementById('profileUpload');
+            profileUpload.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+
+                // Validate file type
+                if (!['image/jpeg', 'image/png'].includes(file.type)) {
+                    alert('Please upload a JPEG or PNG image.');
+                    profileUpload.value = '';
+                    return;
+                }
+
+                // Validate file size (e.g., max 5MB)
+                if (file.size > 5 * 1024 * 1024) {
+                    alert('Image size must be less than 5MB.');
+                    profileUpload.value = '';
+                    return;
+                }
+
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const imageDataUrl = event.target.result;
+
+                    // Update currentUser in localStorage
+                    currentUser.profileImage = imageDataUrl;
+                    let users = JSON.parse(localStorage.getItem('users')) || [];
+                    users = users.map(u => u.email === currentUser.email ? currentUser : u);
+                    localStorage.setItem('users', JSON.stringify(users));
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+
+                    // Update displayed images
+                    document.getElementById('profileLogo').src = imageDataUrl;
+                    document.getElementById('profileImage').src = imageDataUrl;
+
+                    alert('Profile photo updated successfully!');
+                };
+                reader.onerror = () => {
+                    alert('Failed to read the image file.');
+                };
+                reader.readAsDataURL(file);
+            });
+
             // Display AI chat history
             const chatHistory = document.getElementById('chatHistory');
-            if (currentUser.aiChats.length === 0) {
+            if (!currentUser.aiChats || currentUser.aiChats.length === 0) {
                 chatHistory.innerHTML = '<p class="text-gray-600 text-center">No AI chats yet.</p>';
             } else {
                 currentUser.aiChats.forEach(chat => {
@@ -163,7 +215,7 @@
 
             // Display user listings
             const userListings = document.getElementById('userListings');
-            if (currentUser.listings.length === 0) {
+            if (!currentUser.listings || currentUser.listings.length === 0) {
                 userListings.innerHTML = '<p class="text-gray-600 text-center">No listings yet.</p>';
             } else {
                 currentUser.listings.forEach(listing => {
@@ -198,3 +250,5 @@
             });
         });
     </script>
+</body>
+</html>
