@@ -6,11 +6,71 @@
     <title>Room Finder - Sublease Your Space</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        #chatbotPopup {
-            transition: transform 0.3s ease-in-out;
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f7fafc;
+            display: flex;
+            flex-direction: column;
+            min-height: 100vh;
         }
-        #chatbotPopup.hidden {
-            transform: translateY(100%);
+        main {
+            flex-grow: 1;
+            margin: 0 auto;
+            padding: 20px;
+            width: 80%;
+        }
+        section {
+            background-color: white;
+            border-radius: 0.75rem;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            margin-bottom: 3rem;
+        }
+        h2 {
+            font-size: 1.875rem;
+            font-weight: 700;
+            color: #1a202c;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        p {
+            font-size: 1.125rem;
+            color: #4a5568;
+            margin-bottom: 1.5rem;
+            text-align: center;
+        }
+        input, button {
+            width: 100%;
+            padding: 0.75rem;
+            margin-top: 0.75rem;
+            border: 1px solid #e2e8f0;
+            border-radius: 0.5rem;
+        }
+        button {
+            background-color: #2563eb;
+            color: white;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #1d4ed8;
+        }
+        .custom-blue {
+            background-color: #1e40af;
+        }
+        .custom-blue:hover {
+            background-color: #1e3a8a;
+        }
+        .profile-logo {
+            transition: transform 0.2s ease-in-out;
+        }
+        .profile-logo:hover {
+            transform: scale(1.1);
+        }
+        .login-link {
+            transition: color 0.2s ease-in-out;
+        }
+        .login-link:hover {
+            color: #2563eb;
         }
     </style>
 </head>
@@ -20,12 +80,15 @@
         <nav class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 py-4 flex justify-between items-center">
             <div class="flex items-center space-x-6">
                 <div class="text-2xl font-bold text-blue-600">Room Finder</div>
-                <a href="index.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
-                <a href="index.html#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
-                <a href="sublease.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
-                <a href="ai-negotiator.html" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
-                <a href="listings.html" class="text-gray-700 hover:text-blue-600 transition font-medium">Listings</a>
-                <a href="index.html#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
+                <a href="/index" class="text-gray-700 hover:text-blue-600 transition font-medium">Home</a>
+                <a href="/index#about" class="text-gray-700 hover:text-blue-600 transition font-medium">About</a>
+                <a href="/sublease" class="text-gray-700 hover:text-blue-600 transition font-medium">Sublease</a>
+                <a href="/ai-negotiator" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
+                <a href="/listings" class="text-gray-700 hover:text-blue-600 transition font-medium">Listings</a>
+                <a href="/index#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
+            </div>
+            <div id="authSection">
+                <a href="/login" class="text-gray-700 hover:text-blue-600 transition font-medium login-link">Login/Register</a>
             </div>
         </nav>
     </header>
@@ -37,7 +100,7 @@
             <h2 class="text-3xl font-bold text-gray-800 mb-6 text-center">Sublease Your Space</h2>
             <p class="text-lg text-gray-600 mb-6">Looking to sublease your room or apartment? Room Finder makes it easy to list your space and connect with potential subtenants. Create a listing, set your terms, and reach a wide audience effortlessly.</p>
             <div class="flex justify-center">
-                <a href="mailto:support@roomfinder.com" class="inline-block bg-blue-600 text-white px-8 py-3 rounded-full hover:bg-blue-700 transition font-semibold shadow-md hover:shadow-lg">Get Started</a>
+                <a href="/listings" class="inline-block bg-blue-600 text-white px-8 py-3 rounded-full hover:bg-blue-700 transition font-semibold shadow-md hover:shadow-lg" onclick="checkLoginForSublease(event)">Get Started</a>
             </div>
         </section>
     </main>
@@ -47,74 +110,61 @@
         <div class="w-[80%] mx-auto px-4 sm:px-6 lg:px-8 text-center">
             <p class="text-sm">© 2025 Room Finder. All rights reserved.</p>
             <div class="mt-4 flex justify-center space-x-4">
-                <a href="index.html" class="hover:text-blue-400">Home</a>
-                <a href="index.html#about" class="hover:text-blue-400">About</a>
-                <a href="sublease.html" class="hover:text-blue-400">Sublease</a>
-                <a href="ai-negotiator.html" class="hover:text-blue-400">AI Negotiator</a>
-                <a href="index.html#contact" class="hover:text-blue-400">Contact</a>
+                <a href="/index" class="hover:text-blue-400">Home</a>
+                <a href="/index#about" class="hover:text-blue-400">About</a>
+                <a href="/sublease" class="hover:text-blue-400">Sublease</a>
+                <a href="/ai-negotiator" class="hover:text-blue-400">AI Negotiator</a>
+                <a href="/listings" class="hover:text-blue-400">Listings</a>
+                <a href="/index#contact" class="hover:text-blue-400">Contact</a>
             </div>
         </div>
     </footer>
 
-    <!-- AI Chatbot -->
+    <!-- AI Negotiator Button -->
     <div class="fixed bottom-4 right-4 z-50">
-        <button id="chatbotToggle" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition">
-            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 12h8m-4-4v8"></path>
+        <button id="aiButton" aria-label="Navigate to AI Negotiator page" onclick="window.location.href='/ai-negotiator'" class="bg-blue-600 text-white rounded-full p-4 shadow-lg hover:bg-blue-700 transition flex items-center justify-center w-16 h-16">
+            <svg class="w-8 h-8" fill="none" stroke="currentColor" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 11c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
             </svg>
         </button>
-        <div id="chatbotPopup" class="hidden fixed bottom-20 right-4 w-80 bg-white rounded-lg shadow-xl border border-gray-200">
-            <div class="bg-blue-600 text-white p-4 rounded-t-lg">
-                <h3 class="text-lg font-semibold">Room Finder AI Assistant</h3>
-            </div>
-            <div id="chatMessages" class="p-4 h-64 overflow-y-auto">
-                <p class="text-gray-600">Hello! How can I assist you with your sublease?</p>
-            </div>
-            <div class="p-4 border-t border-gray-200">
-                <input id="chatInput" type="text" class="w-full p-2 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Type your message...">
-                <button onclick="sendChatMessage()" class="mt-2 w-full bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition">Send</button>
-            </div>
-        </div>
     </div>
 
     <script>
-        // Chatbot functionality
-        document.getElementById('chatbotToggle').addEventListener('click', () => {
-            const popup = document.getElementById('chatbotPopup');
-            popup.classList.toggle('hidden');
-        });
+        // Update authentication section
+        document.addEventListener('DOMContentLoaded', () => {
+            const profileImages = [
+                'https://via.placeholder.com/40/FF6B6B',
+                'https://via.placeholder.com/40/4ECDC4',
+                'https://via.placeholder.com/40/FFE66D',
+                'https://via.placeholder.com/40/6B7280',
+                'https://via.placeholder.com/40/FF9F1C'
+            ];
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            const authSection = document.getElementById('authSection');
 
-        function sendChatMessage() {
-            const input = document.getElementById('chatInput');
-            const message = input.value.trim();
-            if (!message) return;
-
-            const messages = document.getElementById('chatMessages');
-            // Append user message
-            const userMessage = document.createElement('p');
-            userMessage.className = 'text-right text-blue-600 mt-2';
-            userMessage.textContent = `You: ${message}`;
-            messages.appendChild(userMessage);
-
-            // Simulate AI response
-            const aiMessage = document.createElement('p');
-            aiMessage.className = 'text-left text-gray-600 mt-2';
-            aiMessage.textContent = `AI: I'm here to help! For "${message}", try creating a sublease listing or visit the AI Negotiator page for pricing tips.`;
-            messages.appendChild(aiMessage);
-
-            // Scroll to bottom
-            messages.scrollTop = messages.scrollHeight;
-
-            // Clear input
-            input.value = '';
-        }
-
-        // Allow sending message with Enter key
-        document.getElementById('chatInput').addEventListener('keypress', (e) => {
-            if (e.key === 'Enter') {
-                sendChatMessage();
+            if (currentUser) {
+                if (!currentUser.profileImage) {
+                    currentUser.profileImage = profileImages[Math.floor(Math.random() * profileImages.length)];
+                    let users = JSON.parse(localStorage.getItem('users')) || [];
+                    users = users.map(u => u.email === currentUser.email ? currentUser : u);
+                    localStorage.setItem('users', JSON.stringify(users));
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                }
+                authSection.innerHTML = `
+                    <a href="/profile">
+                        <img id="profileLogo" src="${currentUser.profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo">
+                    </a>
+                `;
             }
         });
+
+        // Check login for sublease action
+        function checkLoginForSublease(event) {
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            if (!currentUser) {
+                event.preventDefault();
+                alert('Please log in to create a sublease listing.');
+                window.location.href = '/login';
+            }
+        }
     </script>
-</body>
-</html>

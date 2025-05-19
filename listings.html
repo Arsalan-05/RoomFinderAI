@@ -51,7 +51,7 @@
         .autocomplete-item:hover {
             background-color: #f3f4f6;
         }
-        #location {
+        #location, #streetAddress {
             user-select: text !important;
             -webkit-user-select: text !important;
             -moz-user-select: text !important;
@@ -70,6 +70,18 @@
             margin: 0.5rem;
             border-radius: 0.25rem;
         }
+        .profile-logo {
+            transition: transform 0.2s personally ease-in-out;
+        }
+        .profile-logo:hover {
+            transform: scale(1.1);
+        }
+        .login-link {
+            transition: color 0.2s ease-in-out;
+        }
+        .login-link:hover {
+            color: #2563eb;
+        }
     </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
@@ -84,6 +96,9 @@
                 <a href="/ai-negotiator" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
                 <a href="/listings" class="text-gray-700 hover:text-blue-600 transition font-medium">Listings</a>
                 <a href="/index#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
+            </div>
+            <div id="authSection">
+                <a href="/login" class="text-gray-700 hover:text-blue-600 transition font-medium login-link">Login/Register</a>
             </div>
         </nav>
     </header>
@@ -107,6 +122,10 @@
                     <label for="location" class="block text-sm font-medium text-gray-700">Location</label>
                     <input type="text" id="location" name="location" required class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., Toronto, Ontario, Canada" autocomplete="off" data-autocomplete="off">
                     <div id="autocomplete-dropdown" class="custom-autocomplete hidden"></div>
+                </div>
+                <div>
+                    <label for="streetAddress" class="block text-sm font-medium text-gray-700">Street Address</label>
+                    <input type="text" id="streetAddress" name="streetAddress" required class="mt-1 w-full p-3 border border-gray-200 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 transition" placeholder="e.g., 123 Main St">
                 </div>
                 <div>
                     <label for="title" class="block text-sm font-medium text-gray-700">Title</label>
@@ -199,7 +218,7 @@
                     var jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1, blankrows: false, defval: '' });
                     var filteredData = jsonData.filter(row => row.some(filledCell));
                     var headerRowIndex = filteredData.findIndex((row, index) =>
-                        row.filter(filledCell).length >= filteredData[index + 1]?.filter(filledCell).length
+                        row.filter(filledCell).length >= filteredData[index +1]?.filter(filledCell).length
                     );
                     if (headerRowIndex === -1 || headerRowIndex > 25) {
                         headerRowIndex = 0;
@@ -389,6 +408,7 @@
                     <h3 class="text-xl font-semibold text-gray-800">${listing.title}</h3>
                     <p class="text-gray-600">Price: $${listing.price.toLocaleString()}/month</p>
                     <p class="text-gray-600">Location: ${listing.location}</p>
+                    <p class="text-gray-600">Address: ${listing.streetAddress || 'Not specified'}</p>
                     <p class="text-gray-600">Type: ${listing.houseType}</p>
                     <p class="text-gray-600">Bedrooms: ${listing.bedrooms}</p>
                     <p class="text-gray-600">Utilities: ${listing.utilities || 'Not specified'}</p>
@@ -402,17 +422,24 @@
         // Handle manual listing submission
         document.getElementById('listingForm').addEventListener('submit', (e) => {
             e.preventDefault();
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            if (!currentUser) {
+                alert('Please log in to add a listing.');
+                window.location.href = '/login';
+                return;
+            }
             const listing = {
                 title: autocorrectInput(sanitizeInput(document.getElementById('title').value)),
                 price: parseInt(document.getElementById('price').value),
                 location: autocorrectInput(sanitizeInput(document.getElementById('location').value)),
+                streetAddress: autocorrectInput(sanitizeInput(document.getElementById('streetAddress').value)),
                 houseType: document.getElementById('houseType').value,
                 bedrooms: parseInt(document.getElementById('bedrooms').value),
                 utilities: document.getElementById('utilities').value,
                 description: autocorrectInput(sanitizeInput(document.getElementById('description').value)),
                 media: uploadedFiles
             };
-            if (!listing.title || !listing.price || !listing.location || !listing.houseType || !listing.bedrooms) {
+            if (!listing.title || !listing.price || !listing.location || !listing.streetAddress || !listing.houseType || !listing.bedrooms) {
                 alert('Please fill in all required fields.');
                 return;
             }
@@ -426,7 +453,7 @@
         });
 
         // API configurations for AI Negotiator
-        const OPENAI_API_KEY = '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';
+        const OPENAI_API_KEY = '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';
         const OPENAI_MODEL = 'gpt-3.5-turbo';
 
         // Function to add listing via AI Negotiator
@@ -437,6 +464,7 @@
             - Title (create a concise title if not explicitly provided, e.g., "2-Bedroom Apartment in [Location]")
             - Price (in dollars per month)
             - Location
+            - Street Address (specific street address, e.g., "123 Main St")
             - House Type (e.g., Apartment, Condo, House)
             - Bedrooms
             - Utilities (Included or Not included, default to Not included if unclear)
@@ -470,6 +498,7 @@
                     title: listing.title || 'New Listing',
                     price: listing.price || 1000,
                     location: listing.location || 'Not specified',
+                    streetAddress: listing.streetAddress || 'Not specified',
                     houseType: listing.houseType || 'Apartment',
                     bedrooms: listing.bedrooms || 1,
                     utilities: listing.utilities || 'Not included',
@@ -488,6 +517,36 @@
 
         // Initialize page
         document.addEventListener('DOMContentLoaded', () => {
+            // Update authentication section based on login status
+            const profileImages = [
+                'https://via.placeholder.com/40/FF6B6B',
+                'https://via.placeholder.com/40/4ECDC4',
+                'https://via.placeholder.com/40/FFE66D',
+                'https://via.placeholder.com/40/6B7280',
+                'https://via.placeholder.com/40/FF9F1C'
+            ];
+            let currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            const authSection = document.getElementById('authSection');
+
+            if (currentUser) {
+                if (!currentUser.profileImage) {
+                    currentUser.profileImage = profileImages[Math.floor(Math.random() * profileImages.length)];
+                    let users = JSON.parse(localStorage.getItem('users')) || [];
+                    users = users.map(u => u.email === currentUser.email ? currentUser : u);
+                    localStorage.setItem('users', JSON.stringify(users));
+                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                }
+                authSection.innerHTML = `
+                    <a href="/profile">
+                        <img id="profileLogo" src="${currentUser.profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo">
+                    </a>
+                `;
+            } else {
+                authSection.innerHTML = `
+                    <a href="/login" class="text-gray-700 hover:text-blue-600 transition font-medium login-link">Login/Register</a>
+                `;
+            }
+
             displayListings();
         });
     </script>

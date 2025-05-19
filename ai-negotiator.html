@@ -85,6 +85,18 @@
         button:hover {
             background-color: #1d4ed8;
         }
+        .profile-logo {
+            transition: transform 0.2s ease-in-out;
+        }
+        .profile-logo:hover {
+            transform: scale(1.1);
+        }
+        .login-link {
+            transition: color 0.2s ease-in-out;
+        }
+        .login-link:hover {
+            color: #2563eb;
+        }
     </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
@@ -98,6 +110,9 @@
                 <a href="/ai-negotiator" class="text-gray-700 hover:text-blue-600 transition font-medium">AI Negotiator</a>
                 <a href="/listings" class="text-gray-700 hover:text-blue-600 transition font-medium">Listings</a>
                 <a href="/index#contact" class="text-gray-700 hover:text-blue-600 transition font-medium">Contact Us</a>
+            </div>
+            <div id="authSection">
+                <a href="/login" class="text-gray-700 hover:text-blue-600 transition font-medium login-link">Login/Register</a>
             </div>
         </nav>
     </header>
@@ -127,11 +142,46 @@
                 <a href="/index#about" class="hover:text-blue-400">About</a>
                 <a href="/sublease" class="hover:text-blue-400">Sublease</a>
                 <a href="/ai-negotiator" class="hover:text-blue-400">AI Negotiator</a>
+                <a href="/listings" class="hover:text-blue-400">Listings</a>
                 <a href="/index#contact" class="hover:text-blue-400">Contact</a>
             </div>
         </div>
     </footer>
     <script>
+        // Authentication check and header update
+        document.addEventListener('DOMContentLoaded', () => {
+            const profileImages = [
+                'https://via.placeholder.com/40/FF6B6B',
+                'https://via.placeholder.com/40/4ECDC4',
+                'https://via.placeholder.com/40/FFE66D',
+                'https://via.placeholder.com/40/6B7280',
+                'https://via.placeholder.com/40/FF9F1C'
+            ];
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            const authSection = document.getElementById('authSection');
+
+            if (!currentUser) {
+                window.location.href = '/login';
+                return;
+            }
+
+            if (!currentUser.profileImage) {
+                currentUser.profileImage = profileImages[Math.floor(Math.random() * profileImages.length)];
+                let users = JSON.parse(localStorage.getItem('users')) || [];
+                users = users.map(u => u.email === currentUser.email ? currentUser : u);
+                localStorage.setItem('users', JSON.stringify(users));
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
+            authSection.innerHTML = `
+                <a href="/profile">
+                    <img id="profileLogo" src="${currentUser.profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo">
+                </a>
+            `;
+
+            // Initialize chat
+            appendMessage('AI', 'Hello! I\'m here to help you negotiate your rental or add a listing. Provide details like price, bedrooms, and house type, or say "add a listing" to create one.', 'left');
+        });
+
         // Initialize Typo.js for autocorrect
         let typo = null;
         if (typeof Typo !== 'undefined') {
@@ -155,8 +205,8 @@
         }
 
         // API configurations
-        const WIT_AI_TOKEN = 'LZNNBHEOSZBZG7IPS6ZOPWCR6WQF3LUL';
-        const OPENAI_API_KEY = 'sk-proj---';
+        const WIT_AI_TOKEN = '63RZTB2OMCSOSAUVLQFOGU6OYVQXD5JA';
+        const OPENAI_API_KEY = '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';
         const OPENAI_MODEL = 'gpt-3.5-turbo';
 
         // State variables
@@ -501,12 +551,4 @@
             await parseWithWitAI(message);
             input.value = '';
         }
-
-        // Initialize chat on DOM load
-        document.addEventListener('DOMContentLoaded', () => {
-            console.log('DOM loaded at', new Date().toISOString());
-            appendMessage('AI', 'Hello! I\'m here to help you negotiate your rental or add a listing. Provide details like price, bedrooms, and house type, or say "add a listing" to create one.', 'left');
-        });
     </script>
-</body>
-</html>
