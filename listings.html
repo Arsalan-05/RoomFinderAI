@@ -78,17 +78,11 @@
             grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
             gap: 1.5rem;
         }
-        .profile-logo {
-            transition: transform 0.2s ease-in-out;
-        }
-        .profile-logo:hover {
-            transform: scale(1.1);
-        }
-        .login-link {
-            transition: color 0.2s ease-in-out;
-        }
-        .login-link:hover {
-            color: #2563eb;
+        #map {
+            height: 400px;
+            width: 100%;
+            border-radius: 0.5rem;
+            margin-top: 1.5rem;
         }
         .modal {
             display: none;
@@ -129,11 +123,17 @@
             color: #000;
             text-decoration: none;
         }
-        #map {
-            height: 400px;
-            width: 100%;
-            border-radius: 0.5rem;
-            margin-top: 1.5rem;
+        .profile-logo {
+            transition: transform 0.2s ease-in-out;
+        }
+        .profile-logo:hover {
+            transform: scale(1.1);
+        }
+        .login-link {
+            transition: color 0.2s ease-in-out;
+        }
+        .login-link:hover {
+            color: #2563eb;
         }
     </style>
 </head>
@@ -270,7 +270,7 @@
     </div>
 
     <script type="text/javascript">
-        // Update authentication section based on login status
+        // Authentication check and header update
         document.addEventListener('DOMContentLoaded', () => {
             const profileImages = [
                 'https://via.placeholder.com/40/FF6B6B',
@@ -279,32 +279,35 @@
                 'https://via.placeholder.com/40/6B7280',
                 'https://via.placeholder.com/40/FF9F1C'
             ];
-            let currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
             const authSection = document.getElementById('authSection');
 
-            if (currentUser) {
-                if (!currentUser.profileImage) {
-                    currentUser.profileImage = profileImages[Math.floor(Math.random() * profileImages.length)];
-                    let users = JSON.parse(localStorage.getItem('users')) || [];
-                    users = users.map(u => u.email === currentUser.email ? currentUser : u);
-                    localStorage.setItem('users', JSON.stringify(users));
-                    localStorage.setItem('currentUser', JSON.stringify(currentUser));
-                }
-                authSection.innerHTML = `
-                    <a href="/profile">
-                        <img id="profileLogo" src="${currentUser.profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo">
-                    </a>
-                `;
-            } else {
-                authSection.innerHTML = `
-                    <a href="/login" class="text-gray-700 hover:text-blue-600 transition font-medium login-link">Login/Register</a>
-                `;
+            if (!currentUser) {
+                window.location.href = '/login';
+                return;
             }
+
+            if (!currentUser.profileImage) {
+                currentUser.profileImage = profileImages[Math.floor(Math.random() * profileImages.length)];
+                let users = JSON.parse(localStorage.getItem('users')) || [];
+                users = users.map(u => u.email === currentUser.email ? currentUser : u);
+                localStorage.setItem('users', JSON.stringify(users));
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            }
+            authSection.innerHTML = `
+                <a href="/profile">
+                    <img id="profileLogo" src="${currentUser.profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo">
+                </a>
+            `;
         });
 
-        const SUPABASE_URL = 'https://fkktwhjybuflxqzopaex.supabase.co/';
+        // Supabase Configuration
+        const SUPABASE_URL = 'https://fkktwhjybuflxqzopaex.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZra3R3aGp5YnVmbHhxem9wYWV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc0OTg5NzQsImV4cCI6MjA2MzA3NDk3NH0.4vdk_ozdi_jNNP1dxpAlGF2Km2detytIhN-lMNXNFHs';
         const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, {
+            db: {
+                schema: 'public'
+            },
             global: {
                 headers: { 'Content-Type': 'application/json' }
             }
@@ -337,12 +340,12 @@
 
         // Autocomplete logic
         const locationInput = document.getElementById('location');
-        const coronation = document.getElementById('autocomplete-dropdown');
+        const dropdown = document.getElementById('autocomplete-dropdown');
         let debounceTimeout;
 
         function showSuggestions(input) {
-            coronation.innerHTML = '';
-            coronation.classList.add('hidden');
+            dropdown.innerHTML = '';
+            dropdown.classList.add('hidden');
             if (!input || cities.length === 0) return;
 
             const filtered = cities
@@ -360,8 +363,8 @@
                 const item = document.createElement('div');
                 item.className = 'autocomplete-item text-gray-500';
                 item.textContent = 'No matching cities';
-                coronation.appendChild(item);
-                coronation.classList.remove('hidden');
+                dropdown.appendChild(item);
+                dropdown.classList.remove('hidden');
                 return;
             }
 
@@ -371,13 +374,13 @@
                 item.textContent = loc.display;
                 item.addEventListener('click', () => {
                     locationInput.value = loc.display;
-                    coronation.classList.add('hidden');
+                    dropdown.classList.add('hidden');
                     console.log('Selected location:', loc.display);
                 });
-                coronation.appendChild(item);
+                dropdown.appendChild(item);
             });
 
-            coronation.classList.remove('hidden');
+            dropdown.classList.remove('hidden');
             console.log('Showing suggestions for:', input, filtered.map(f => f.display));
         }
 
@@ -391,11 +394,11 @@
         });
 
         locationInput.addEventListener('keydown', (e) => {
-            if (e.key === 'Enter' && !coronation.classList.contains('hidden')) {
-                const firstItem = coronation.querySelector('.autocomplete-item:not(.text-gray-500)');
+            if (e.key === 'Enter' && !dropdown.classList.contains('hidden')) {
+                const firstItem = dropdown.querySelector('.autocomplete-item:not(.text-gray-500)');
                 if (firstItem) {
                     locationInput.value = firstItem.textContent;
-                    coronation.classList.add('hidden');
+                    dropdown.classList.add('hidden');
                     console.log('Enter key selected:', firstItem.textContent);
                 }
                 e.preventDefault();
@@ -403,8 +406,8 @@
         });
 
         document.addEventListener('click', (e) => {
-            if (!locationInput.contains(e.target) && !coronation.contains(e.target)) {
-                coronation.classList.add('hidden');
+            if (!locationInput.contains(e.target) && !dropdown.contains(e.target)) {
+                dropdown.classList.add('hidden');
                 console.log('Dropdown hidden');
             }
         });
@@ -440,9 +443,11 @@
                     const previewContainer = document.createElement('div');
                     previewContainer.innerHTML = previewElement;
                     mediaPreview.appendChild(previewContainer.firstChild);
+                    console.log('Preview added for file:', file.name);
                 };
                 reader.readAsDataURL(file);
             });
+            console.log('Files selected:', files.map(f => f.name));
         });
 
         function autocorrectInput(input) {
@@ -462,6 +467,139 @@
             return input.replace(/[^a-zA-Z0-9\s,.-]/g, '').trim();
         }
 
+        // Upload media to Supabase
+        async function uploadMedia(files) {
+            const uploadedMedia = [];
+            const storageApiUrl = `${SUPABASE_URL}/storage/v1/object/listing-media/Photos`;
+
+            for (const fileObj of files) {
+                const file = fileObj.file;
+                const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
+                const filePath = fileName;
+
+                // Determine content type based on extension
+                const extension = file.name.split('.').pop().toLowerCase();
+                let contentType;
+                switch (extension) {
+                    case 'jpg':
+                    case 'jpeg':
+                        contentType = 'image/jpeg';
+                        break;
+                    case 'png':
+                        contentType = 'image/png';
+                        break;
+                    case 'mp4':
+                        contentType = 'video/mp4';
+                        break;
+                    default:
+                        contentType = 'application/octet-stream';
+                }
+
+                console.log('Processing file:', { name: file.name, detectedType: file.type, assignedType: contentType });
+
+                // Validate file content for images
+                if (contentType.startsWith('image/')) {
+                    const reader = new FileReader();
+                    await new Promise((resolve, reject) => {
+                        reader.onload = (e) => {
+                            const img = new Image();
+                            img.onload = () => resolve();
+                            img.onerror = () => reject(new Error('Invalid image file'));
+                            img.src = e.target.result;
+                        };
+                        reader.readAsDataURL(file);
+                    });
+                }
+
+                // Prepare form data for REST API upload
+                const formData = new FormData();
+                formData.append('file', file);
+                formData.append('cacheControl', '3600');
+                formData.append('upsert', 'false');
+
+                try {
+                    // Step 1: Upload using REST API
+                    const response = await fetch(`${storageApiUrl}/${filePath}`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${SUPABASE_KEY}`,
+                            'apikey': SUPABASE_KEY
+                        },
+                        body: formData
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        throw new Error(`Upload failed: ${response.status} - ${errorText}`);
+                    }
+
+                    // Step 2: Verify the content type
+                    const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/listing-media/Photos/${filePath}`;
+                    let verifyResponse = await fetch(publicUrl, { method: 'HEAD' });
+                    let serverContentType = verifyResponse.headers.get('Content-Type');
+                    console.log('Server-reported content type:', { name: file.name, serverContentType });
+
+                    // Step 3: If MIME type is incorrect, delete and re-upload
+                    if (serverContentType !== contentType) {
+                        console.warn('MIME type mismatch detected. Server returned:', serverContentType, 'Expected:', contentType);
+
+                        // Delete the file
+                        await fetch(`${storageApiUrl}/${filePath}`, {
+                            method: 'DELETE',
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_KEY}`,
+                                'apikey': SUPABASE_KEY
+                            }
+                        });
+
+                        // Re-upload with explicit content type
+                        const reUploadFormData = new FormData();
+                        reUploadFormData.append('file', file);
+                        reUploadFormData.append('cacheControl', '3600');
+                        reUploadFormData.append('upsert', 'false');
+                        reUploadFormData.append('contentType', contentType);
+
+                        const reUploadResponse = await fetch(`${storageApiUrl}/${filePath}`, {
+                            method: 'POST',
+                            headers: {
+                                'Authorization': `Bearer ${SUPABASE_KEY}`,
+                                'apikey': SUPABASE_KEY
+                            },
+                            body: reUploadFormData
+                        });
+
+                        if (!reUploadResponse.ok) {
+                            const errorText = await reUploadResponse.text();
+                            throw new Error(`Re-upload failed: ${reUploadResponse.status} - ${errorText}`);
+                        }
+
+                        // Verify again
+                        verifyResponse = await fetch(publicUrl, { method: 'HEAD' });
+                        serverContentType = verifyResponse.headers.get('Content-Type');
+                        console.log('After re-upload, server-reported content type:', { name: file.name, serverContentType });
+
+                        if (serverContentType !== contentType) {
+                            throw new Error(`Failed to set correct MIME type for ${file.name}. Server returned ${serverContentType}, expected ${contentType}.`);
+                        }
+                    }
+
+                    console.log('Uploaded media:', { name: file.name, type: contentType, url: publicUrl });
+
+                    uploadedMedia.push({
+                        name: file.name,
+                        type: contentType,
+                        url: publicUrl,
+                        data: fileObj.data // For localStorage compatibility
+                    });
+                } catch (err) {
+                    console.error('Upload failed for', file.name, err);
+                    throw err;
+                }
+            }
+
+            return uploadedMedia;
+        }
+
         // Initialize map
         let map;
         let markers = [];
@@ -469,9 +607,10 @@
         function initMap() {
             map = L.map('map').setView([43.6532, -79.3832], 10); // Default: Toronto
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+                attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
                 maxZoom: 18
             }).addTo(map);
+            console.log('Map initialized');
         }
 
         // Geocode location using Nominatim API
@@ -497,13 +636,10 @@
 
         // Update map with listings
         async function updateMap(listings) {
-            // Clear existing markers
             markers.forEach(marker => map.removeLayer(marker));
             markers = [];
-
             const validCoordinates = [];
 
-            // Add new markers
             for (const listing of listings) {
                 if (!listing.location) {
                     console.warn('Listing missing location:', listing);
@@ -514,20 +650,20 @@
                 if (coords) {
                     const marker = L.marker([coords.lat, coords.lon])
                         .addTo(map)
-                        .bindPopup(`$${listing.price.toLocaleString()}/mo`);
+                        .bindPopup(`<b>${listing.title}</b><br>$${listing.price.toLocaleString()}/mo`);
                     markers.push(marker);
                     validCoordinates.push([coords.lat, coords.lon]);
                     console.log('Added marker for', listing.location, 'at', coords);
                 }
             }
 
-            // Adjust map bounds to fit all markers
             if (validCoordinates.length > 0) {
                 const bounds = L.latLngBounds(validCoordinates);
                 map.fitBounds(bounds, { padding: [50, 50], maxZoom: 15 });
             } else {
-                map.setView([43.6532, -79.3832], 10); // Fallback to default view
+                map.setView([43.6532, -79.3832], 10);
             }
+            console.log('Map updated with', markers.length, 'markers');
         }
 
         // Fetch listings from Supabase
@@ -543,7 +679,7 @@
                 return data || [];
             } catch (error) {
                 console.error('Error fetching listings:', error);
-                alert('Failed to load listings. Please try again later.');
+                alert('Failed to load listings: ' + error.message);
                 return [];
             }
         }
@@ -563,25 +699,61 @@
             listings.forEach(listing => {
                 console.log('Rendering listing:', listing);
 
-                // Ensure media is parsed correctly
-                if (typeof listing.media === 'string') {
-                    try {
-                        listing.media = JSON.parse(listing.media);
-                    } catch (err) {
-                        console.error('Failed to parse media JSON:', listing.media);
-                        listing.media = [];
-                    }
+                let media = listing.media || [];
+                if (!Array.isArray(media)) {
+                    console.warn('Media is not an array, resetting to empty array:', media);
+                    media = [];
                 }
 
-                const primaryImage = listing.media && listing.media.length > 0 && listing.media[0].type.startsWith('image/')
-                    ? listing.media[0].url
+                // Fix incorrect MIME types based on file extension
+                media = media.map(item => {
+                    if (item.type === 'application/json' || !item.type || item.type === 'application/octet-stream') {
+                        const extension = item.name.split('.').pop().toLowerCase();
+                        let correctedType;
+                        switch (extension) {
+                            case 'jpg':
+                            case 'jpeg':
+                                correctedType = 'image/jpeg';
+                                break;
+                            case 'png':
+                                correctedType = 'image/png';
+                                break;
+                            case 'mp4':
+                                correctedType = 'video/mp4';
+                                break;
+                            default:
+                                correctedType = item.type || 'application/octet-stream';
+                        }
+                        console.log('Corrected MIME type for', item.name, 'from', item.type, 'to', correctedType);
+                        return { ...item, type: correctedType };
+                    }
+                    return item;
+                });
+
+                // Check if the file is an image by type or extension
+                const isImage = (file) => {
+                    const byType = file.type.startsWith('image/');
+                    const byExtension = file.name.match(/\.(jpg|jpeg|png)$/i);
+                    return byType || byExtension;
+                };
+
+                const primaryImage = media.length > 0 && isImage(media[0])
+                    ? media[0].url
                     : 'https://via.placeholder.com/300x200?text=No+Image';
+
+                // Fetch the actual server MIME type for debugging
+                fetch(primaryImage, { method: 'HEAD' })
+                    .then(response => {
+                        const serverContentType = response.headers.get('Content-Type');
+                        console.log('Server content type for', primaryImage, ':', serverContentType);
+                    })
+                    .catch(err => console.error('Failed to fetch MIME type for', primaryImage, err));
 
                 const listingCard = document.createElement('div');
                 listingCard.className = 'listing-card bg-white rounded-lg shadow-md overflow-hidden';
 
                 listingCard.innerHTML = `
-                    <img src="${primaryImage}" alt="${listing.title}" class="listing-image">
+                    <img src="${primaryImage}" alt="${listing.title}" class="listing-image" onerror="this.src='https://via.placeholder.com/300x200?text=Image+Not+Available';">
                     <div class="p-4">
                         <h3 class="text-lg font-semibold text-gray-800 truncate">${listing.title}</h3>
                         <p class="text-xl font-bold text-blue-600">$${listing.price.toLocaleString()}/mo</p>
@@ -600,7 +772,6 @@
                 container.appendChild(listingCard);
             });
 
-            // Add event listeners for view details buttons
             document.querySelectorAll('.view-details-btn').forEach(button => {
                 button.addEventListener('click', () => {
                     const listing = JSON.parse(button.dataset.listing);
@@ -608,7 +779,6 @@
                 });
             });
 
-            // Update map with listings
             await updateMap(listings);
         }
 
@@ -642,56 +812,31 @@
             document.getElementById('modalViewDetails').href = `/listing_details?id=${listing.id}`;
             
             modal.style.display = 'block';
+            console.log('Modal shown for listing:', listing.title);
         }
 
         closeButton.addEventListener('click', () => {
             modal.style.display = 'none';
+            console.log('Modal closed');
         });
 
         window.addEventListener('click', (event) => {
             if (event.target === modal) {
                 modal.style.display = 'none';
+                console.log('Modal closed by clicking outside');
             }
         });
 
-        async function uploadMedia(files) {
-            const uploadedMedia = [];
-
-            for (const fileObj of files) {
-                const file = fileObj.file;
-                const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
-                const filePath = fileName;
-
-                try {
-                    const { error: uploadError } = await supabase.storage
-                        .from('listing-media')
-                        .upload(filePath, file, {
-                            cacheControl: '3600',
-                            upsert: false
-                        });
-
-                    if (uploadError) throw uploadError;
-
-                    const { data } = supabase.storage
-                        .from('listing-media')
-                        .getPublicUrl(filePath);
-
-                    uploadedMedia.push({
-                        name: file.name,
-                        type: file.type,
-                        url: data.publicUrl
-                    });
-                } catch (err) {
-                    console.error('Upload failed for', file.name, err);
-                    throw err;
-                }
-            }
-
-            return uploadedMedia;
-        }
-
+        // Handle form submission
         document.getElementById('listingForm').addEventListener('submit', async (e) => {
             e.preventDefault();
+
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            if (!currentUser) {
+                alert('Please log in to add a listing.');
+                window.location.href = '/login';
+                return;
+            }
 
             try {
                 const media = uploadedFiles.length > 0 ? await uploadMedia(uploadedFiles) : [];
@@ -704,21 +849,41 @@
                     bedrooms: parseInt(document.getElementById('bedrooms').value),
                     utilities: document.getElementById('utilities').value,
                     description: autocorrectInput(sanitizeInput(document.getElementById('description').value)),
-                    media: JSON.stringify(media)
+                    media: media,
+                    created_at: new Date().toISOString()
                 };
+
+                console.log('Submitting listing:', listing);
 
                 if (!listing.title || !listing.price || !listing.location || !listing.house_type || !listing.bedrooms) {
                     alert('Please fill in all required fields.');
                     return;
                 }
 
-                const { error } = await supabase.from('listings').insert([listing]);
+                const { data, error } = await supabase
+                    .from('listings')
+                    .insert([listing])
+                    .select();
 
                 if (error) {
                     console.error('Error inserting listing:', error);
-                    alert('Failed to add listing.');
+                    alert('Failed to add listing: ' + error.message);
                     return;
                 }
+
+                // Update localStorage for profile.html
+                const newListing = {
+                    ...listing,
+                    id: data[0].id,
+                    media: media // Store media as array for profile.html
+                };
+                currentUser.listings = currentUser.listings || [];
+                currentUser.listings.push(newListing);
+                let users = JSON.parse(localStorage.getItem('users')) || [];
+                users = users.map(u => u.email === currentUser.email ? currentUser : u);
+                localStorage.setItem('users', JSON.stringify(users));
+                localStorage.setItem('currentUser', JSON.stringify(currentUser));
+                console.log('Updated localStorage with new listing:', newListing);
 
                 e.target.reset();
                 mediaPreview.innerHTML = '';
@@ -728,7 +893,7 @@
                 await displayListings();
             } catch (err) {
                 console.error('Submission failed:', err);
-                alert('Failed to add listing: ' + err.message);
+                alert('Failed to add listing: ' + (err.message || err));
             }
         });
 
