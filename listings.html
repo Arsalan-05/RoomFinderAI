@@ -7,7 +7,6 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/typo-js@1.2.3/typo.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-    <!-- Leaflet.js CSS and JS -->
     <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin=""/>
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
     <style>
@@ -135,6 +134,92 @@
         .login-link:hover {
             color: #2563eb;
         }
+        .chat-modal {
+            display: none;
+            position: fixed;
+            z-index: 1000;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background-color: rgba(0,0,0,0.5);
+        }
+        .chat-modal-content {
+            background-color: #fff;
+            margin: 5% auto;
+            padding: 20px;
+            border-radius: 0.5rem;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            width: 90%;
+            max-width: 600px;
+            display: flex;
+            flex-direction: column;
+            max-height: 80vh;
+        }
+        .chat-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #e5e7eb;
+            padding-bottom: 10px;
+            margin-bottom: 10px;
+        }
+        .chat-messages {
+            flex-grow: 1;
+            overflow-y: auto;
+            padding: 10px;
+            background-color: #f9fafb;
+            border-radius: 0.5rem;
+            margin-bottom: 10px;
+        }
+        .message {
+            margin: 10px 0;
+            padding: 10px;
+            border-radius: 0.5rem;
+            max-width: 80%;
+        }
+        .message.sent {
+            background-color: #3b82f6;
+            color: white;
+            margin-left: auto;
+        }
+        .message.received {
+            background-color: #e5e7eb;
+            color: #1f2937;
+            margin-right: auto;
+        }
+        .message-timestamp {
+            font-size: 0.75rem;
+            color: #6b7280;
+            margin-top: 4px;
+        }
+        .chat-input-container {
+            display: flex;
+            gap: 10px;
+        }
+        .chat-input {
+            flex-grow: 1;
+            padding: 10px;
+            border: 1px solid #d1d5db;
+            border-radius: 0.5rem;
+            resize: none;
+        }
+        .chat-send-btn {
+            background-color: #3b82f6;
+            color: white;
+            padding: 10px 20px;
+            border-radius: 0.5rem;
+            font-weight: 500;
+            transition: background-color 0.2s;
+        }
+        .chat-send-btn:hover {
+            background-color: #2563eb;
+        }
+        .chat-btn:disabled {
+            background-color: #9ca3af;
+            cursor: not-allowed;
+        }
     </style>
 </head>
 <body class="bg-gray-50 flex flex-col min-h-screen">
@@ -225,7 +310,6 @@
             <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Available Listings</h2>
             <button onclick="displayListings()" class="mb-4 bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition">Refresh Listings</button>
             <div id="listingsContainer" class="listing-grid"></div>
-            <!-- Map Container -->
             <div id="map"></div>
         </section>
 
@@ -241,6 +325,21 @@
                 <p id="modalDescription" class="text-gray-600 mb-4"></p>
                 <div id="modalMedia" class="modal-media flex flex-wrap mb-4"></div>
                 <a id="modalViewDetails" href="#" class="inline-block bg-blue-600 text-white p-3 rounded-lg hover:bg-blue-700 transition font-semibold text-center w-full">View Details</a>
+            </div>
+        </div>
+
+        <!-- Chat Modal -->
+        <div id="chatModal" class="chat-modal">
+            <div class="chat-modal-content">
+                <div class="chat-header">
+                    <h2 id="chatTitle" class="text-xl font-bold text-gray-800">Chat</h2>
+                    <span class="close-button chat-close-button">×</span>
+                </div>
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-container">
+                    <textarea id="chatInput" class="chat-input" rows="2" placeholder="Type your message..."></textarea>
+                    <button id="chatSendBtn" class="chat-send-btn">Send</button>
+                </div>
             </div>
         </div>
     </main>
@@ -271,7 +370,7 @@
 
     <script type="text/javascript">
         // Authentication check and header update
-        document.addEventListener('DOMContentLoaded', () => {
+        document.addEventListener('DOMContentLoaded', async () => {
             const profileImages = [
                 'https://via.placeholder.com/40/FF6B6B',
                 'https://via.placeholder.com/40/4ECDC4',
@@ -287,6 +386,21 @@
                 return;
             }
 
+            // Set current user email for RLS
+            try {
+                const { error } = await supabase.rpc('set_current_user_email', { email: currentUser.email });
+                if (error) {
+                    console.error('Error setting current user email:', error);
+                    alert('Failed to initialize session. Please try again.');
+                    return;
+                }
+                console.log('Current user email set for RLS:', currentUser.email);
+            } catch (err) {
+                console.error('RPC call failed:', err);
+                alert('Failed to initialize session. Please check your connection.');
+                return;
+            }
+
             if (!currentUser.profileImage) {
                 currentUser.profileImage = profileImages[Math.floor(Math.random() * profileImages.length)];
                 let users = JSON.parse(localStorage.getItem('users')) || [];
@@ -299,6 +413,9 @@
                     <img id="profileLogo" src="${currentUser.profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo">
                 </a>
             `;
+            initMap();
+            setupChat();
+            await displayListings();
         });
 
         // Supabase Configuration
@@ -323,6 +440,24 @@
         typo.dictionary['condo'] = 1;
         typo.dictionary['sublease'] = 1;
         typo.dictionary['negoitator'] = 1;
+
+        // Utility Functions
+        function autocorrectInput(input) {
+            if (typeof input !== 'string' || !input) return input;
+            const words = input.split(' ');
+            const correctedWords = words.map(word => {
+                if (typo.check(word)) return word;
+                const suggestions = typo.suggest(word);
+                console.log(`Autocorrect: ${word} -> ${suggestions.length > 0 ? suggestions[0] : word}`);
+                return suggestions.length > 0 ? suggestions[0] : word;
+            });
+            return correctedWords.join(' ');
+        }
+
+        function sanitizeInput(input) {
+            if (typeof input !== 'string') return '';
+            return input.replace(/[^a-zA-Z0-9\s,.-]/g, '').trim();
+        }
 
         // Load cities.json for autocomplete
         let cities = [];
@@ -450,23 +585,6 @@
             console.log('Files selected:', files.map(f => f.name));
         });
 
-        function autocorrectInput(input) {
-            if (typeof input !== 'string' || !input) return input;
-            const words = input.split(' ');
-            const correctedWords = words.map(word => {
-                if (typo.check(word)) return word;
-                const suggestions = typo.suggest(word);
-                console.log(`Autocorrect: ${word} -> ${suggestions.length > 0 ? suggestions[0] : word}`);
-                return suggestions.length > 0 ? suggestions[0] : word;
-            });
-            return correctedWords.join(' ');
-        }
-
-        function sanitizeInput(input) {
-            if (typeof input !== 'string') return '';
-            return input.replace(/[^a-zA-Z0-9\s,.-]/g, '').trim();
-        }
-
         // Upload media to Supabase
         async function uploadMedia(files) {
             const uploadedMedia = [];
@@ -477,7 +595,6 @@
                 const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9.-]/g, '_')}`;
                 const filePath = fileName;
 
-                // Determine content type based on extension
                 const extension = file.name.split('.').pop().toLowerCase();
                 let contentType;
                 switch (extension) {
@@ -497,7 +614,6 @@
 
                 console.log('Processing file:', { name: file.name, detectedType: file.type, assignedType: contentType });
 
-                // Validate file content for images
                 if (contentType.startsWith('image/')) {
                     const reader = new FileReader();
                     await new Promise((resolve, reject) => {
@@ -511,14 +627,12 @@
                     });
                 }
 
-                // Prepare form data for REST API upload
                 const formData = new FormData();
                 formData.append('file', file);
                 formData.append('cacheControl', '3600');
                 formData.append('upsert', 'false');
 
                 try {
-                    // Step 1: Upload using REST API
                     const response = await fetch(`${storageApiUrl}/${filePath}`, {
                         method: 'POST',
                         headers: {
@@ -533,17 +647,13 @@
                         throw new Error(`Upload failed: ${response.status} - ${errorText}`);
                     }
 
-                    // Step 2: Verify the content type
                     const publicUrl = `${SUPABASE_URL}/storage/v1/object/public/listing-media/Photos/${filePath}`;
                     let verifyResponse = await fetch(publicUrl, { method: 'HEAD' });
                     let serverContentType = verifyResponse.headers.get('Content-Type');
                     console.log('Server-reported content type:', { name: file.name, serverContentType });
 
-                    // Step 3: If MIME type is incorrect, delete and re-upload
                     if (serverContentType !== contentType) {
                         console.warn('MIME type mismatch detected. Server returned:', serverContentType, 'Expected:', contentType);
-
-                        // Delete the file
                         await fetch(`${storageApiUrl}/${filePath}`, {
                             method: 'DELETE',
                             headers: {
@@ -552,7 +662,6 @@
                             }
                         });
 
-                        // Re-upload with explicit content type
                         const reUploadFormData = new FormData();
                         reUploadFormData.append('file', file);
                         reUploadFormData.append('cacheControl', '3600');
@@ -573,7 +682,6 @@
                             throw new Error(`Re-upload failed: ${reUploadResponse.status} - ${errorText}`);
                         }
 
-                        // Verify again
                         verifyResponse = await fetch(publicUrl, { method: 'HEAD' });
                         serverContentType = verifyResponse.headers.get('Content-Type');
                         console.log('After re-upload, server-reported content type:', { name: file.name, serverContentType });
@@ -589,7 +697,7 @@
                         name: file.name,
                         type: contentType,
                         url: publicUrl,
-                        data: fileObj.data // For localStorage compatibility
+                        data: fileObj.data
                     });
                 } catch (err) {
                     console.error('Upload failed for', file.name, err);
@@ -605,7 +713,7 @@
         let markers = [];
 
         function initMap() {
-            map = L.map('map').setView([43.6532, -79.3832], 10); // Default: Toronto
+            map = L.map('map').setView([43.6532, -79.3832], 10);
             L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                 attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
                 maxZoom: 18
@@ -705,7 +813,6 @@
                     media = [];
                 }
 
-                // Fix incorrect MIME types based on file extension
                 media = media.map(item => {
                     if (item.type === 'application/json' || !item.type || item.type === 'application/octet-stream') {
                         const extension = item.name.split('.').pop().toLowerCase();
@@ -730,7 +837,6 @@
                     return item;
                 });
 
-                // Check if the file is an image by type or extension
                 const isImage = (file) => {
                     const byType = file.type.startsWith('image/');
                     const byExtension = file.name.match(/\.(jpg|jpeg|png)$/i);
@@ -741,7 +847,6 @@
                     ? media[0].url
                     : 'https://via.placeholder.com/300x200?text=No+Image';
 
-                // Fetch the actual server MIME type for debugging
                 fetch(primaryImage, { method: 'HEAD' })
                     .then(response => {
                         const serverContentType = response.headers.get('Content-Type');
@@ -752,6 +857,7 @@
                 const listingCard = document.createElement('div');
                 listingCard.className = 'listing-card bg-white rounded-lg shadow-md overflow-hidden';
 
+                const hasOwner = !!listing.user_email;
                 listingCard.innerHTML = `
                     <img src="${primaryImage}" alt="${listing.title}" class="listing-image" onerror="this.src='https://via.placeholder.com/300x200?text=Image+Not+Available';">
                     <div class="p-4">
@@ -766,7 +872,10 @@
                             <span>${listing.utilities}</span>
                         </div>
                         <p class="text-gray-600 text-sm mt-2 line-clamp-2">${listing.description || 'No description provided'}</p>
-                        <button class="view-details-btn mt-4 w-full bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition" data-listing='${JSON.stringify(listing)}'>View Details</button>
+                        <div class="flex space-x-2 mt-4">
+                            <button class="view-details-btn w-1/2 bg-blue-600 text-white p-2 rounded-lg hover:bg-blue-700 transition" data-listing='${JSON.stringify(listing)}'>View Details</button>
+                            <button class="chat-btn w-1/2 bg-green-600 text-white p-2 rounded-lg transition ${hasOwner ? 'hover:bg-green-700' : ''}" data-listing='${JSON.stringify(listing)}' ${hasOwner ? '' : 'disabled title="No owner specified for this listing"'}>Chat</button>
+                        </div>
                     </div>
                 `;
                 container.appendChild(listingCard);
@@ -779,10 +888,18 @@
                 });
             });
 
+            document.querySelectorAll('.chat-btn').forEach(button => {
+                button.addEventListener('click', () => {
+                    const listing = JSON.parse(button.dataset.listing);
+                    startConversation(listing);
+                });
+            });
+
             await updateMap(listings);
+            console.log('Listings displayed:', listings.length);
         }
 
-        // Modal handling
+        // Modal handling for listings
         const modal = document.getElementById('listingModal');
         const closeButton = document.querySelector('.close-button');
 
@@ -850,6 +967,7 @@
                     utilities: document.getElementById('utilities').value,
                     description: autocorrectInput(sanitizeInput(document.getElementById('description').value)),
                     media: media,
+                    user_email: currentUser.email,
                     created_at: new Date().toISOString()
                 };
 
@@ -871,11 +989,10 @@
                     return;
                 }
 
-                // Update localStorage for profile.html
                 const newListing = {
                     ...listing,
                     id: data[0].id,
-                    media: media // Store media as array for profile.html
+                    media: media
                 };
                 currentUser.listings = currentUser.listings || [];
                 currentUser.listings.push(newListing);
@@ -897,6 +1014,175 @@
             }
         });
 
+        // Chat Functionality
+        let currentConversationId = null;
+        let currentListing = null;
+
+        function setupChat() {
+            const chatModal = document.getElementById('chatModal');
+            const chatCloseButton = document.querySelector('.chat-close-button');
+            const chatMessagesContainer = document.getElementById('chatMessages');
+            const chatInput = document.getElementById('chatInput');
+            const chatSendBtn = document.getElementById('chatSendBtn');
+
+            if (!chatModal || !chatCloseButton || !chatMessagesContainer || !chatInput || !chatSendBtn) {
+                console.error('Chat modal elements missing:', {
+                    chatModal: !!chatModal,
+                    chatCloseButton: !!chatCloseButton,
+                    chatMessagesContainer: !!chatMessagesContainer,
+                    chatInput: !!chatInput,
+                    chatSendBtn: !!chatSendBtn
+                });
+                return;
+            }
+
+            chatCloseButton.addEventListener('click', () => {
+                chatModal.style.display = 'none';
+                console.log('Chat modal closed');
+            });
+
+            window.addEventListener('click', (event) => {
+                if (event.target === chatModal) {
+                    chatModal.style.display = 'none';
+                    console.log('Chat modal closed by clicking outside');
+                }
+            });
+
+            chatSendBtn.addEventListener('click', async () => {
+                const messageContent = chatInput.value.trim();
+                if (!messageContent || !currentConversationId) {
+                    console.warn('No message content or conversation ID:', { messageContent, currentConversationId });
+                    return;
+                }
+
+                console.log('Sending message:', messageContent);
+                const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+                const { error } = await supabase
+                    .from('messages')
+                    .insert({
+                        conversation_id: currentConversationId,
+                        sender_email: currentUser.email,
+                        content: messageContent,
+                        created_at: new Date().toISOString()
+                    });
+
+                if (error) {
+                    console.error('Error sending message:', error);
+                    alert('Failed to send message: ' + error.message);
+                    return;
+                }
+
+                chatInput.value = '';
+                await loadMessages(currentConversationId);
+                console.log('Message sent successfully');
+            });
+
+            supabase
+                .channel('public:messages')
+                .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, (payload) => {
+                    if (currentConversationId && currentConversationId === payload.new.conversation_id) {
+                        console.log('New message received:', payload.new);
+                        loadMessages(currentConversationId);
+                    }
+                })
+                .subscribe((status) => {
+                    console.log('Supabase channel subscription status:', status);
+                });
+        }
+
+        async function startConversation(listing) {
+            console.log('Starting conversation for listing:', listing.title);
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+            if (!currentUser) {
+                alert('Please log in to start a chat.');
+                window.location.href = '/login';
+                return;
+            }
+
+            if (!listing.user_email) {
+                alert('Cannot start chat: Listing owner not specified.');
+                return;
+            }
+
+            currentListing = listing;
+            document.getElementById('chatTitle').textContent = `Chat about ${listing.title}`;
+
+            const { data: conversations, error } = await supabase
+                .from('conversations')
+                .select('*')
+                .eq('listing_id', listing.id)
+                .eq('sender_email', currentUser.email)
+                .eq('receiver_email', listing.user_email);
+
+            if (error) {
+                console.error('Error checking conversation:', error);
+                alert('Failed to load conversation: ' + error.message);
+                return;
+            }
+
+            let conversation;
+            if (conversations && conversations.length > 0) {
+                conversation = conversations[0];
+                console.log('Existing conversation found:', conversation.id);
+            } else {
+                const { data, error: insertError } = await supabase
+                    .from('conversations')
+                    .insert({
+                        listing_id: listing.id,
+                        sender_email: currentUser.email,
+                        receiver_email: listing.user_email,
+                        created_at: new Date().toISOString()
+                    })
+                    .select()
+                    .single();
+
+                if (insertError) {
+                    console.error('Error creating conversation:', insertError);
+                    alert('Failed to start conversation: ' + insertError.message);
+                    return;
+                }
+                conversation = data;
+                console.log('New conversation created:', conversation.id);
+            }
+
+            currentConversationId = conversation.id;
+            await loadMessages(conversation.id);
+            document.getElementById('chatModal').style.display = 'block';
+            console.log('Chat modal opened for conversation:', conversation.id);
+        }
+
+        async function loadMessages(conversationId) {
+            console.log('Loading messages for conversation:', conversationId);
+            const { data: messages, error } = await supabase
+                .from('messages')
+                .select('*')
+                .eq('conversation_id', conversationId)
+                .order('created_at', { ascending: true });
+
+            if (error) {
+                console.error('Error loading messages:', error);
+                alert('Failed to load messages: ' + error.message);
+                return;
+            }
+
+            const chatMessagesContainer = document.getElementById('chatMessages');
+            chatMessagesContainer.innerHTML = '';
+            const currentUser = JSON.parse(localStorage.getItem('currentUser'));
+
+            messages.forEach(message => {
+                const messageElement = document.createElement('div');
+                messageElement.className = `message ${message.sender_email === currentUser.email ? 'sent' : 'received'}`;
+                messageElement.innerHTML = `
+                    <p>${sanitizeInput(message.content)}</p>
+                    <div class="message-timestamp">${new Date(message.created_at).toLocaleTimeString()}</div>
+                `;
+                chatMessagesContainer.appendChild(messageElement);
+            });
+
+            chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+            console.log('Messages loaded:', messages.length);
+        }
+
         // Real-time subscription to listings
         supabase
             .channel('public:listings')
@@ -905,12 +1191,6 @@
                 displayListings();
             })
             .subscribe();
-
-        // Initialize page
-        document.addEventListener('DOMContentLoaded', async () => {
-            initMap();
-            await displayListings();
-        });
     </script>
 </body>
 </html>
