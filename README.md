@@ -1,4 +1,4 @@
-![RoomFinderAI](/Users/Arsalan Amir Ali/Developer/GitHub/RoomFinderAI/frontend/favicon.svg)
+![RoomFinderAI](frontend/favicon.svg)
 # RoomFinderAI
 
 A rental marketplace that replies to inquiries in under 60 seconds, shows you the real monthly cost of a place instead of just the rent, and helps you negotiate with landlords using patterns learned from 1,247 past conversations.
