@@ -92,10 +92,11 @@ async function getCurrentUser() {
             }
             
             return {
+                id: profile.id,
                 email: profile.email,
                 firstName: profile.first_name || 'User',
                 lastName: profile.last_name || 'Name',
-                profileImage: profile.profile_image_url
+                profileImage: profile.profile_image_url || profile.profile_image
             };
         }
         
@@ -162,7 +163,49 @@ function storeProfileImage(email, imageData) {
 }
 
 /**
- * Update auth section with appropriate content
+ * Persist currentUser to localStorage after profile sync
+ */
+function syncCurrentUserToStorage(user) {
+    if (!user || !user.email) return;
+    try {
+        localStorage.setItem('currentUser', JSON.stringify(user));
+    } catch (e) {
+        console.warn('Could not persist currentUser:', e);
+    }
+}
+
+/**
+ * Whether the user already passed the Turnstile security check this session
+ */
+function isSecurityCheckPassed() {
+    return sessionStorage.getItem('turnstile_verified') === 'true' ||
+        localStorage.getItem('security_check_passed') === 'true';
+}
+
+/**
+ * Redirect after login — skip verification-modal if already verified
+ */
+function redirectAfterLogin(redirectUrl) {
+    const target = redirectUrl || 'index.html';
+    if (isSecurityCheckPassed()) {
+        window.location.href = target;
+    } else {
+        window.location.href = 'verification-modal.html?redirect=' + encodeURIComponent(target);
+    }
+}
+
+/**
+ * Toggle top-level Profile nav link visibility
+ */
+function updateNavProfileLink(isLoggedIn) {
+    const profileLink = document.getElementById('navProfileLink');
+    if (profileLink) {
+        profileLink.style.display = isLoggedIn ? '' : 'none';
+    }
+}
+
+/**
+ * Update auth section UI (profile image / login button)
  */
 async function updateAuthSection() {
     const authSection = document.getElementById('authSection');
@@ -221,8 +264,9 @@ async function updateAuthSection() {
                     currentUser.lastName = profileData.lastName || '';
                     console.log('✅ Updated names from backend in auth section:', profileData.firstName, profileData.lastName);
                 }
-                
-                // localStorage removed - using Supabase);
+
+                currentUser.isPro = profileData.isPro === true || profileData.plan === 'pro';
+                currentUser.plan = profileData.plan || (currentUser.isPro ? 'pro' : 'free');
             }
         } catch (error) {
             console.error('Error fetching profile data in auth section:', error);
@@ -254,12 +298,19 @@ async function updateAuthSection() {
             // Profile images are now stored in Supabase Storage, no local persistence needed
         }
         
+        const proBadge = currentUser.isPro
+            ? '<span class="absolute -bottom-1 -right-1 bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full">PRO</span>'
+            : '';
+
         // User is logged in - show profile
         authSection.innerHTML = `
-            <a href="profile.html" class="profile-link">
+            <a href="profile.html" class="profile-link relative inline-block">
                 <img id="profileLogo" src="${profileImage}" alt="Profile" class="w-10 h-10 rounded-full profile-logo hover:ring-2 hover:ring-blue-500 transition-all duration-200" onerror="this.src='${DEFAULT_PROFILE_IMAGE}'">
+                ${proBadge}
             </a>
         `;
+        syncCurrentUserToStorage(currentUser);
+        updateNavProfileLink(true);
         
         console.log('✅ Auth section updated - showing profile image');
     } else {
@@ -269,8 +320,27 @@ async function updateAuthSection() {
                 Login/Register
             </a>
         `;
+        updateNavProfileLink(false);
         
         console.log('✅ Auth section updated - showing login/register');
+    }
+
+    // Mirror desktop auth into mobile nav when present
+    const mobileAuth = document.getElementById('mobileAuthSection');
+    if (mobileAuth && authSection) {
+        if (await isUserAuthenticated() && currentUser) {
+            mobileAuth.innerHTML = `
+                <a href="profile.html" class="mobile-menu-item auth-item" onclick="typeof closeMobileMenu==='function'&&closeMobileMenu()">
+                    <img src="${authSection.querySelector('img')?.src || DEFAULT_PROFILE_IMAGE}" alt="Profile" class="site-mobile-profile-img" onerror="this.src='${DEFAULT_PROFILE_IMAGE}'">
+                    My Profile
+                </a>
+                <a href="#" class="mobile-menu-item auth-item" onclick="event.preventDefault(); if(window.UniversalAuth&&UniversalAuth.logout) UniversalAuth.logout();">Log out</a>
+            `;
+        } else {
+            mobileAuth.innerHTML = `
+                <a href="login.html" class="mobile-menu-item auth-item" onclick="typeof closeMobileMenu==='function'&&closeMobileMenu()">Login/Register</a>
+            `;
+        }
     }
 }
 
@@ -300,10 +370,9 @@ async function initSupabaseAuth() {
             .single();
 
         if (error || !profile) {
-            // Create profile if it doesn't exist
             const newProfile = {
                 email: currentUser.email,
-                profile_image: DEFAULT_PROFILE_IMAGE
+                profile_image_url: DEFAULT_PROFILE_IMAGE
             };
             const { data, error: insertError } = await supabaseClient
                 .from('profiles')
@@ -318,10 +387,9 @@ async function initSupabaseAuth() {
             profile = data;
         }
 
-        // Update current user with profile data
         currentUser.id = profile.id;
-        currentUser.profileImage = profile.profile_image || DEFAULT_PROFILE_IMAGE;
-        // localStorage removed - using Supabase);
+        currentUser.profileImage = profile.profile_image_url || profile.profile_image || DEFAULT_PROFILE_IMAGE;
+        syncCurrentUserToStorage(currentUser);
 
         console.log('✅ Supabase profile synchronized');
         return true;
@@ -356,7 +424,7 @@ async function initUniversalAuth(options = {}) {
             return { authenticated: false, allowed: true };
         } else if (redirectToLogin) {
             console.log('🔄 Redirecting to login...');
-            window.location.href = '/login';
+            window.location.href = 'login.html';
             return { authenticated: false, allowed: false };
         }
     }
@@ -383,7 +451,7 @@ function handleLogout() {
     // This provides a consistent logout interface
     try {
         // localStorage removed
-        window.location.href = '/login';
+        window.location.href = 'login.html';
     } catch (error) {
         console.log('Logout blocked by protection system');
     }
@@ -434,6 +502,8 @@ window.UniversalAuth = {
     logout: handleLogout,
     storeProfileImage: storeProfileImage,
     getStoredProfileImage: getStoredProfileImage,
+    redirectAfterLogin: redirectAfterLogin,
+    isSecurityCheckPassed: isSecurityCheckPassed,
     DEFAULT_PROFILE_IMAGE: DEFAULT_PROFILE_IMAGE
 };
 

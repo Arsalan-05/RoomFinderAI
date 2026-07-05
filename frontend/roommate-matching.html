@@ -13,16 +13,7 @@
 
     <!-- Supabase CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
-
-    <!-- App Configuration -->
-    <script>
-        window.AppConfig = { supabase: null };
-        if (typeof supabase !== 'undefined') {
-            const SUPABASE_URL = 'https://fkktwhjybuflxqzopaex.supabase.co';
-            const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZra3R3aGp5YnVmbHhxem9wYWV4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDc0OTg5NzQsImV4cCI6MjA2MzA3NDk3NH0.4vdk_ozdi_jNNP1dxpAlGF2Km2detytIhN-lMNXNFHs';
-            window.AppConfig.supabase = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-        }
-    </script>
+    <script src="js/supabase-config-init.js"></script>
 
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -32,7 +23,7 @@
     <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
 
     <!-- Unified CSS System -->
-    <link rel="stylesheet" href="/frontend/modules/css/main.css"/>
+    <link rel="stylesheet" href="/modules/css/main.css"/>
     <link rel="stylesheet" href="css/roommate-matching.css"/>
 </head>
 <body>
@@ -186,7 +177,7 @@
 
             <div class="choice-boxes">
                 <!-- Box 1: I Have a Room - Redirects to Listings -->
-                <div class="choice-box has-room-box" onclick="window.location.href='listings.html'">
+                <div class="choice-box has-room-box" onclick="roomPalApp.openAddListingFlow()">
                     <div class="box-icon">
                         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M2.25 12l8.954-8.955c.44-.439 1.152-.439 1.591 0L21.75 12M4.5 9.75v10.125c0 .621.504 1.125 1.125 1.125H9.75v-4.875c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125V21h4.125c.621 0 1.125-.504 1.125-1.125V9.75M8.25 21h8.25"/>
@@ -530,12 +521,14 @@
             <div class="flex border-b mb-8">
                 <button class="tab-btn active" data-tab="createProfile">Create Profile</button>
                 <button class="tab-btn" data-tab="browsePeople">Browse Seekers</button>
-                <button class="tab-btn" data-tab="myGroup">My Group</button>
+                <!-- Group matching is not implemented yet; hidden until the backend exists. -->
+                <button class="tab-btn" data-tab="myGroup" style="display:none;">My Group</button>
             </div>
 
             <!-- Create Profile Form -->
             <div id="createProfileTab" class="card p-8 max-w-2xl fade-in">
                 <h2 class="text-xl font-bold text-gray-900 mb-6">Your Roommate Profile</h2>
+                <div id="myProfileView" class="hidden"></div>
                 <form id="quickProfileForm" class="space-y-6">
                     <div class="grid md:grid-cols-2 gap-4">
                         <div>
@@ -758,25 +751,25 @@
             </div>
 
             <!-- Chat View (hidden by default) -->
-            <div id="chatView" class="hidden">
-                <div class="flex items-center gap-3 mb-4 pb-4 border-b">
-                    <button onclick="closeChatView()" class="text-gray-600 hover:text-gray-900">
-                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <div id="chatView" class="roompal-chat-view hidden">
+                <div class="chat-header roompal-chat-header">
+                    <button type="button" onclick="closeChatView()" class="text-white/90 hover:text-white mr-2" aria-label="Back">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"/>
                         </svg>
                     </button>
-                    <div id="chatPartnerInfo" class="flex items-center gap-3">
+                    <div id="chatPartnerInfo" class="flex items-center gap-3 flex-1 min-w-0">
                         <!-- Partner info loaded by JS -->
                     </div>
                 </div>
 
-                <div id="messagesContainer" class="space-y-3 max-h-[50vh] overflow-y-auto mb-4 p-2">
+                <div id="messagesContainer" class="chat-messages roompal-chat-messages">
                     <!-- Messages loaded by JS -->
                 </div>
 
-                <form id="chatReplyForm" class="flex gap-2">
-                    <input type="text" name="reply" class="form-input flex-1" placeholder="Type a message..." required>
-                    <button type="submit" class="btn-primary px-6">Send</button>
+                <form id="chatReplyForm" class="chat-input-container">
+                    <input type="text" name="reply" class="chat-input form-input flex-1" placeholder="Type a message..." required>
+                    <button type="submit" class="chat-send-btn">Send</button>
                 </form>
             </div>
         </div>
@@ -847,16 +840,13 @@
     </div>
 
     <!-- Message Modal -->
-    <div id="messageModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center">
-        <div class="bg-white rounded-2xl max-w-lg w-full mx-4 p-8">
-            <div class="flex justify-between items-center mb-6">
-                <h2 class="text-xl font-bold text-gray-900">Send Message</h2>
-                <button onclick="closeMessageModal()" class="text-gray-400 hover:text-gray-600">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                    </svg>
-                </button>
+    <div id="messageModal" class="site-overlay-modal fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+        <div class="chat-modal-content site-contact-modal max-w-lg w-full mx-auto">
+            <div class="chat-header">
+                <h2 class="text-base font-semibold m-0">Send Message</h2>
+                <button type="button" onclick="closeMessageModal()" class="close-button chat-close-button" aria-label="Close">×</button>
             </div>
+            <div class="p-6">
 
             <div id="messageRecipient" class="flex items-center gap-3 mb-6 p-3 bg-gray-50 rounded-lg">
                 <!-- Recipient info loaded by JS -->
@@ -866,6 +856,15 @@
                 <textarea name="message" class="form-input mb-4" rows="4" placeholder="Write your message..." required></textarea>
                 <button type="submit" class="btn-primary w-full">Send Message</button>
             </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Roommate Detail Modal -->
+    <div id="roommateDetailModal" class="fixed inset-0 bg-black/50 z-50 hidden items-center justify-center p-4">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 relative">
+            <button type="button" onclick="roomPalApp.closeRoommateDetail()" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600">✕</button>
+            <div id="roommateDetailBody"></div>
         </div>
     </div>
 
@@ -1141,6 +1140,12 @@
             input.disabled = false;
             input.focus();
         }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            if (typeof UniversalAuth !== 'undefined') {
+                UniversalAuth.init({ allowAnonymous: true, requireSupabase: true });
+            }
+        });
     </script>
 </body>
 </html>

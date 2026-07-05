@@ -10,31 +10,13 @@
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=Space+Grotesk:wght@300;400;500;600;700&display=swap" rel="stylesheet">
 
     <!-- Unified CSS System - No Inline Styles -->
-    <link rel="stylesheet" href="/frontend/modules/css/main.css"/>
+    <link rel="stylesheet" href="/modules/css/main.css"/>
+    <script src="/js/site-nav.js" defer></script>
+    <script src="/js/site-bootstrap.js" defer></script>
     
 </head>
-<body class="bg-gray-50">
-    <!-- Premium Header -->
-    <header class="fixed top-0 w-full premium-header z-50">
-        <nav class="w-[85%] max-w-7xl mx-auto px-6 lg:px-8 py-6 flex justify-between items-center">
-            <div class="flex items-center space-x-8">
-                <a href="index.html" class="text-2xl font-bold gradient-text font-display">RoomFinderAI</a>
-                <div class="hidden lg:flex items-center space-x-1">
-                    <a href="index.html" class="nav-link">Home</a>
-                    <a href="roommate-matching.html" class="nav-link">RoomPal</a>
-                    <a href="listings.html" class="nav-link">Listings</a>
-                    <a href="student-housing.html" class="nav-link">Student Housing</a>
-                    <a href="legal.html" class="nav-link">Legal Center</a>
-                    <a href="ai-negotiator.html" class="nav-link">AI Negotiator</a>
-                    <a href="pricing.html" class="nav-link">Pricing</a>
-                </div>
-            </div>
-            <div class="flex items-center space-x-4">
-                <a href="login.html" class="nav-link">Login</a>
-                <a href="profile.html" class="bg-gradient-to-r from-purple-600 to-blue-600 text-white px-6 py-2 rounded-full hover:shadow-lg transition-all duration-300">Profile</a>
-            </div>
-        </nav>
-    </header>
+<body class="bg-white site-has-header">
+    <header id="header" class="fixed top-0 w-full premium-header z-50"></header>
 
     <!-- Hero Section -->
     <section class="pt-32 pb-20 gradient-bg-legal text-white relative overflow-hidden">
@@ -70,7 +52,7 @@
     </section>
 
     <!-- Getting Started Section -->
-    <section class="py-16 bg-gradient-to-b from-blue-50 to-indigo-50">
+    <section class="py-16 bg-white">
         <div class="w-[90%] max-w-7xl mx-auto px-4">
             <div class="text-center mb-12">
                 <h2 class="text-4xl font-bold text-gray-900 mb-6 font-display">New to Legal Issues?</h2>
@@ -138,6 +120,9 @@
                 </button>
                 <button onclick="showTab('documents')" class="tab-button" data-tab="documents">
                     Document Generator
+                </button>
+                <button onclick="showTab('lease-review')" class="tab-button" data-tab="lease-review">
+                    Lease Review
                 </button>
                 <button onclick="showTab('rights')" class="tab-button" data-tab="rights">
                     Know Your Rights
@@ -215,7 +200,7 @@
                         <div class="space-y-6">
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-2">Document Type</label>
-                                <select id="documentType" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                <select id="documentType" class="form-input">
                                     <option value="">Select Document Type</option>
                                     <option value="lease">Lease Agreement</option>
                                     <option value="rental-application">Rental Application</option>
@@ -231,7 +216,7 @@
                             
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-2">State/Jurisdiction</label>
-                                <select id="jurisdictionSelect" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                <select id="jurisdictionSelect" class="form-input">
                                     <option value="">Select State</option>
                                     <option value="CA">California</option>
                                     <option value="NY">New York</option>
@@ -247,7 +232,7 @@
                             
                             <div>
                                 <label class="block text-sm font-medium text-gray-700 mb-2">Describe Your Situation</label>
-                                <textarea id="situationDescription" rows="4" placeholder="Provide details about your situation..." class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"></textarea>
+                                <textarea id="situationDescription" rows="4" placeholder="Provide details about your situation..." class="form-input"></textarea>
                             </div>
                             
                             <button onclick="generateDocument()" class="w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-4 rounded-xl font-semibold hover:from-purple-700 hover:to-indigo-700 transition-all">
@@ -264,7 +249,7 @@
                                             📋 Copy
                                         </button>
                                         <button onclick="downloadDocument()" class="text-sm bg-blue-600 text-white px-3 py-1 rounded-lg hover:bg-blue-700 transition-colors">
-                                            📥 Download PDF
+                                            📥 Download Text
                                         </button>
                                     </div>
                                 </div>
@@ -272,6 +257,26 @@
                                     <p class="text-gray-500 italic">Generate a document to see the preview here...</p>
                                 </div>
                             </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Lease Review Tab -->
+            <div id="lease-review-tab" class="tab-content">
+                <div class="glass-card p-8">
+                    <h2 class="text-3xl font-bold text-gray-900 mb-4 text-center">🔍 AI Lease Review</h2>
+                    <p class="text-center text-gray-600 mb-8 max-w-2xl mx-auto">Paste your lease text and our AI will flag red flags, unusual clauses, and negotiation points.</p>
+                    <div class="grid lg:grid-cols-2 gap-8">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-2">Lease text *</label>
+                            <textarea id="leaseReviewText" rows="14" placeholder="Paste lease agreement text here..." class="form-input font-mono text-sm"></textarea>
+                            <button onclick="reviewLease()" id="leaseReviewBtn" class="mt-4 w-full bg-gradient-to-r from-purple-600 to-indigo-600 text-white px-6 py-4 rounded-xl font-semibold hover:from-purple-700 hover:to-indigo-700 transition-all">
+                                Analyze Lease
+                            </button>
+                        </div>
+                        <div id="leaseReviewResults" class="bg-gray-50 p-6 rounded-xl border border-gray-200 min-h-96">
+                            <p class="text-gray-500 italic">Results will appear here after analysis.</p>
                         </div>
                     </div>
                 </div>
@@ -474,6 +479,37 @@
                             </button>
                         </div>
                     </div>
+                    <div class="mt-10 pt-8 border-t border-gray-200">
+                        <h3 class="text-xl font-bold text-gray-900 mb-4 text-center">Official tenant support links</h3>
+                        <p class="text-sm text-gray-600 text-center mb-6">Educational resources — verify details for your province or state.</p>
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <a href="https://www.hud.gov/topics/rental_assistance/tenantrights" target="_blank" rel="noopener noreferrer" class="p-4 border border-gray-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors">
+                                <div class="font-semibold text-gray-900">HUD — U.S. Tenant Rights</div>
+                                <div class="text-sm text-gray-600">Federal fair housing and rental assistance</div>
+                            </a>
+                            <a href="https://www.lsc.gov/" target="_blank" rel="noopener noreferrer" class="p-4 border border-gray-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors">
+                                <div class="font-semibold text-gray-900">Legal Services Corporation</div>
+                                <div class="text-sm text-gray-600">Find free legal aid in the U.S.</div>
+                            </a>
+                            <a href="https://tribunalsontario.ca/ltb/" target="_blank" rel="noopener noreferrer" class="p-4 border border-gray-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors">
+                                <div class="font-semibold text-gray-900">Ontario Landlord and Tenant Board</div>
+                                <div class="text-sm text-gray-600">Forms, guides, and dispute resolution (Ontario)</div>
+                            </a>
+                            <a href="https://www.canada.ca/en/financial-consumer-agency/services/rights-responsibilities/renting.html" target="_blank" rel="noopener noreferrer" class="p-4 border border-gray-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors">
+                                <div class="font-semibold text-gray-900">Government of Canada — Renting</div>
+                                <div class="text-sm text-gray-600">Consumer rights for Canadian renters</div>
+                            </a>
+                            <a href="https://www.nolo.com/legal-encyclopedia/tenant-rights" target="_blank" rel="noopener noreferrer" class="p-4 border border-gray-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors">
+                                <div class="font-semibold text-gray-900">Nolo — Tenant Rights Encyclopedia</div>
+                                <div class="text-sm text-gray-600">State-by-state overview (U.S.)</div>
+                            </a>
+                            <a href="support.html" class="p-4 border border-gray-200 rounded-lg hover:border-green-400 hover:bg-green-50 transition-colors">
+                                <div class="font-semibold text-gray-900">RoomFinderAI Support</div>
+                                <div class="text-sm text-gray-600">Contact our team or use the AI assistant</div>
+                            </a>
+                        </div>
+                    </div>
+                    <div id="legalResourceResults" class="hidden mt-8 glass-card p-6 max-h-[70vh] overflow-y-auto"></div>
                 </div>
             </div>
 
@@ -487,7 +523,7 @@
                             <div class="space-y-6">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Calculator Type</label>
-                                    <select id="calculatorType" onchange="switchCalculator()" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                    <select id="calculatorType" onchange="switchCalculator()" class="form-input">
                                         <option value="security-deposit">Security Deposit Calculator</option>
                                         <option value="prorated-rent">Prorated Rent Calculator</option>
                                         <option value="late-fees">Late Fee Calculator</option>
@@ -499,16 +535,52 @@
                                 <div id="securityDepositInputs" class="calculator-inputs">
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-2">Monthly Rent</label>
-                                        <input type="number" id="monthlyRent" placeholder="1500" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        <input type="number" id="monthlyRent" placeholder="1500" class="form-input">
                                     </div>
                                     <div>
                                         <label class="block text-sm font-medium text-gray-700 mb-2">State</label>
-                                        <select id="depositState" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                        <select id="depositState" class="form-input">
                                             <option value="CA">California (2 months max)</option>
                                             <option value="NY">New York (1 month max)</option>
                                             <option value="TX">Texas (No limit)</option>
                                             <option value="FL">Florida (No limit)</option>
                                         </select>
+                                    </div>
+                                </div>
+
+                                <!-- Prorated Rent Calculator -->
+                                <div id="proratedRentInputs" class="calculator-inputs hidden">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Monthly Rent</label>
+                                        <input type="number" id="proratedMonthlyRent" placeholder="1500" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Move-in Day of Month</label>
+                                        <input type="number" id="moveInDay" min="1" max="31" placeholder="15" class="form-input">
+                                    </div>
+                                </div>
+
+                                <!-- Late Fee Calculator -->
+                                <div id="lateFeeInputs" class="calculator-inputs hidden">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Monthly Rent</label>
+                                        <input type="number" id="lateFeeRent" placeholder="1500" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Days Late</label>
+                                        <input type="number" id="daysLate" min="1" placeholder="5" class="form-input">
+                                    </div>
+                                </div>
+
+                                <!-- Damages Calculator -->
+                                <div id="damagesInputs" class="calculator-inputs hidden">
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Security Deposit Held</label>
+                                        <input type="number" id="depositHeld" placeholder="1500" class="form-input">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-medium text-gray-700 mb-2">Landlord Claimed Deductions</label>
+                                        <input type="number" id="claimedDeductions" placeholder="400" class="form-input">
                                     </div>
                                 </div>
                                 
@@ -540,12 +612,12 @@
                             <div class="space-y-6">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Your Location</label>
-                                    <input type="text" id="attorneyLocation" placeholder="City, State or ZIP" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                    <input type="text" id="attorneyLocation" placeholder="City, State or ZIP" class="form-input">
                                 </div>
                                 
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Legal Issue</label>
-                                    <select id="legalIssue" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                    <select id="legalIssue" class="form-input">
                                         <option value="">Select Issue Type</option>
                                         <option value="eviction">Eviction Defense</option>
                                         <option value="security-deposit">Security Deposit Dispute</option>
@@ -559,7 +631,7 @@
                                 
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Budget Range</label>
-                                    <select id="budgetRange" class="w-full p-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500">
+                                    <select id="budgetRange" class="form-input">
                                         <option value="pro-bono">Pro Bono/Free</option>
                                         <option value="low-cost">Low Cost ($100-300)</option>
                                         <option value="moderate">Moderate ($300-500)</option>
@@ -764,14 +836,47 @@
         }
 
         // Quick Start Scenarios
+        const SCENARIO_PROMPTS = {
+            'security-deposit': 'My landlord is refusing to return my security deposit. What are my rights and what steps should I take?',
+            'rent-increase': 'My landlord wants to raise my rent. What are the legal limits and notice requirements in my area?',
+            'repairs': 'My landlord has not made necessary repairs. What are my options including repair-and-deduct or withholding rent?',
+            'eviction': 'I received an eviction notice. What should I do first and what are my tenant rights?'
+        };
+
         function quickStartScenario(scenario) {
-            // Implementation for quick start scenarios
-            console.log('Quick start for:', scenario);
-            // Could redirect to specific tools or show guided workflows
+            const titles = {
+                'security-deposit': 'Security Deposit Dispute',
+                'rent-increase': 'Rent Increase Rights',
+                'repairs': 'Repair & Maintenance Rights',
+                'eviction': 'Eviction Defense Guide'
+            };
+            const prompt = SCENARIO_PROMPTS[scenario];
+            if (!prompt) return;
+            showTab('resources');
+            showLegalResource(titles[scenario] || 'Legal Guidance', prompt);
+        }
+
+        function switchCalculator() {
+            const type = document.getElementById('calculatorType')?.value || 'security-deposit';
+            document.querySelectorAll('.calculator-inputs').forEach(el => el.classList.add('hidden'));
+
+            const map = {
+                'security-deposit': 'securityDepositInputs',
+                'prorated-rent': 'proratedRentInputs',
+                'late-fees': 'lateFeeInputs',
+                'damages': 'damagesInputs'
+            };
+            const target = document.getElementById(map[type] || 'securityDepositInputs');
+            if (target) target.classList.remove('hidden');
+
+            document.getElementById('calculationResults').innerHTML =
+                '<p class="text-gray-500 italic">Select calculation type and enter values to see results here...</p>';
         }
 
         // Document Generation
-        function generateDocument() {
+        let lastGeneratedDocument = '';
+
+        async function generateDocument() {
             const docType = document.getElementById('documentType').value;
             const jurisdiction = document.getElementById('jurisdictionSelect').value;
             const situation = document.getElementById('situationDescription').value;
@@ -780,28 +885,84 @@
                 alert('Please select document type and jurisdiction');
                 return;
             }
-            
-            // Simulate document generation
+
             const preview = document.getElementById('documentPreview');
-            preview.innerHTML = `
-                <div class="space-y-4">
-                    <h4 class="font-bold text-lg">${docType.replace('-', ' ').toUpperCase()}</h4>
-                    <p><strong>Date:</strong> ${new Date().toLocaleDateString()}</p>
-                    <p><strong>Jurisdiction:</strong> ${jurisdiction}</p>
-                    <div class="mt-4">
-                        <p>This is a preview of your generated legal document. The actual document would contain:</p>
-                        <ul class="list-disc ml-6 mt-2">
-                            <li>Legally compliant language for ${jurisdiction}</li>
-                            <li>Your specific situation details</li>
-                            <li>Proper formatting and structure</li>
-                            <li>Relevant legal citations</li>
-                        </ul>
-                    </div>
-                    <div class="mt-4 p-3 bg-yellow-50 border border-yellow-200 rounded">
-                        <p class="text-sm text-yellow-800">💡 <strong>Tip:</strong> This preview shows the document structure. The full document would be available after generation.</p>
-                    </div>
-                </div>
-            `;
+            preview.innerHTML = '<p class="text-gray-500">Generating document with AI...</p>';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'legal-document',
+                        message: `Draft a ${docType.replace(/-/g, ' ')} for jurisdiction ${jurisdiction}. Situation: ${situation || 'standard residential rental'}. Include all standard sections.`
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || data.details || 'Generation failed');
+
+                lastGeneratedDocument = data.response || '';
+                preview.innerHTML = `<div class="whitespace-pre-wrap text-sm text-gray-800">${escapeHtml(lastGeneratedDocument)}</div>
+                    <p class="text-xs text-amber-700 mt-4 p-2 bg-amber-50 rounded">⚠️ AI-generated draft — not legal advice. Have an attorney review before signing.</p>`;
+            } catch (err) {
+                preview.innerHTML = `<p class="text-red-600">Failed to generate: ${escapeHtml(err.message)}. Ensure OPENAI_API_KEY or GROQ_API_KEY is set on Railway.</p>`;
+            }
+        }
+
+        async function reviewLease() {
+            const leaseText = document.getElementById('leaseReviewText').value.trim();
+            const resultsDiv = document.getElementById('leaseReviewResults');
+            const btn = document.getElementById('leaseReviewBtn');
+
+            if (!leaseText) {
+                alert('Please paste lease text to review');
+                return;
+            }
+
+            btn.disabled = true;
+            btn.textContent = 'Analyzing...';
+            resultsDiv.innerHTML = '<p class="text-gray-500">Analyzing lease...</p>';
+
+            try {
+                const response = await fetch('/api/negotiate/lease-review', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ leaseText })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || data.details || 'Review failed');
+
+                const review = data.review || {};
+                const flags = review.flags || [];
+                const ratingColors = { good: 'green', fair: 'yellow', concerning: 'orange', problematic: 'red', unknown: 'gray' };
+                const rating = review.overallRating || 'unknown';
+
+                resultsDiv.innerHTML = `
+                    <div class="space-y-4">
+                        <div class="flex items-center gap-3">
+                            <span class="text-sm font-semibold uppercase tracking-wide text-${ratingColors[rating] || 'gray'}-700">${rating}</span>
+                            <span class="text-xs text-gray-500">AI lease review</span>
+                        </div>
+                        <p class="text-gray-700">${escapeHtml(review.summary || 'No summary')}</p>
+                        ${flags.length ? `<div class="space-y-3">${flags.map(f => `
+                            <div class="p-3 rounded-lg border ${f.severity === 'high' ? 'border-red-200 bg-red-50' : f.severity === 'medium' ? 'border-yellow-200 bg-yellow-50' : 'border-gray-200 bg-white'}">
+                                <p class="text-xs font-bold uppercase text-gray-500 mb-1">${f.severity || 'info'}</p>
+                                <p class="text-sm font-medium text-gray-900">${escapeHtml(f.issue || '')}</p>
+                                ${f.recommendation ? `<p class="text-sm text-gray-600 mt-1">${escapeHtml(f.recommendation)}</p>` : ''}
+                            </div>
+                        `).join('')}</div>` : '<p class="text-green-700 text-sm">No major flags detected.</p>'}
+                        ${review.negotiationPoints?.length ? `<div><p class="font-semibold text-sm mb-2">Negotiation points:</p><ul class="list-disc ml-5 text-sm text-gray-700">${review.negotiationPoints.map(p => `<li>${escapeHtml(p)}</li>`).join('')}</ul></div>` : ''}
+                    </div>`;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-600">${escapeHtml(err.message)}</p>`;
+            } finally {
+                btn.disabled = false;
+                btn.textContent = 'Analyze Lease';
+            }
+        }
+
+        function escapeHtml(str) {
+            return String(str).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
         }
 
         // Rights Learning
@@ -856,10 +1017,21 @@
                 // Add more topics as needed
             };
             
-            const info = rightsInfo[topic] || {
-                title: 'Legal Rights Information',
-                content: '<p>Detailed information about this topic is being prepared.</p>'
-            };
+            const info = rightsInfo[topic];
+            if (!info) {
+                // No hardcoded content — generate real, topic-specific guidance with the AI.
+                const topicLabels = {
+                    'eviction': 'Eviction Rights & Process',
+                    'repairs': 'Repair & Habitability Rights',
+                    'privacy': 'Tenant Privacy & Landlord Entry Rights',
+                    'discrimination': 'Fair Housing & Anti-Discrimination Rights'
+                };
+                const label = topicLabels[topic] || 'Tenant Legal Rights';
+                detailsDiv.classList.add('hidden');
+                showLegalResource(label,
+                    `Explain tenant rights regarding "${label}". Cover key legal protections, what landlords can and cannot do, common violations, and practical steps a tenant should take. Educational overview for US/Canada — note users should verify local laws.`);
+                return;
+            }
             
             titleDiv.textContent = info.title;
             contentDiv.innerHTML = info.content;
@@ -922,106 +1094,160 @@
                         ` : ''}
                     </div>
                 `;
+                return;
+            }
+
+            if (calculatorType === 'prorated-rent') {
+                const rent = parseFloat(document.getElementById('proratedMonthlyRent').value);
+                const day = parseInt(document.getElementById('moveInDay').value, 10);
+                if (!rent || !day) {
+                    resultsDiv.innerHTML = '<p class="text-red-600">Enter monthly rent and move-in day.</p>';
+                    return;
+                }
+                const daysInMonth = 30;
+                const daysRemaining = Math.max(0, daysInMonth - day + 1);
+                const prorated = Math.round((rent / daysInMonth) * daysRemaining);
+                resultsDiv.innerHTML = `<div class="bg-green-50 p-4 rounded-lg border border-green-200"><p><strong>Prorated rent:</strong> $${prorated.toLocaleString()} for ${daysRemaining} days</p></div>`;
+                return;
+            }
+
+            if (calculatorType === 'late-fees') {
+                const rent = parseFloat(document.getElementById('lateFeeRent').value);
+                const days = parseInt(document.getElementById('daysLate').value, 10);
+                if (!rent || !days) {
+                    resultsDiv.innerHTML = '<p class="text-red-600">Enter rent and days late.</p>';
+                    return;
+                }
+                const typicalMax = Math.min(rent * 0.05, 50 + days * 5);
+                resultsDiv.innerHTML = `<div class="bg-amber-50 p-4 rounded-lg border border-amber-200"><p><strong>Estimated typical late fee range:</strong> $${Math.round(typicalMax * 0.5).toLocaleString()} – $${Math.round(typicalMax).toLocaleString()}</p><p class="text-xs text-amber-700 mt-2">Many states cap late fees — verify your local law.</p></div>`;
+                return;
+            }
+
+            if (calculatorType === 'damages') {
+                const held = parseFloat(document.getElementById('depositHeld').value);
+                const claimed = parseFloat(document.getElementById('claimedDeductions').value);
+                if (!held || isNaN(claimed)) {
+                    resultsDiv.innerHTML = '<p class="text-red-600">Enter deposit held and claimed deductions.</p>';
+                    return;
+                }
+                const refund = Math.max(0, held - claimed);
+                const pct = held > 0 ? Math.round((claimed / held) * 100) : 0;
+                resultsDiv.innerHTML = `<div class="bg-blue-50 p-4 rounded-lg border border-blue-200"><p><strong>Expected refund:</strong> $${refund.toLocaleString()}</p><p><strong>Landlord claim:</strong> ${pct}% of deposit</p></div>`;
             }
         }
 
-        // Attorney Search
-        function searchAttorneys() {
+        // Attorney Search — real AI recommendations (educational, not a live directory)
+        async function searchAttorneys() {
             const location = document.getElementById('attorneyLocation').value;
             const issue = document.getElementById('legalIssue').value;
             const budget = document.getElementById('budgetRange').value;
-            
+
             if (!location || !issue) {
                 alert('Please enter location and select legal issue');
                 return;
             }
-            
+
             const resultsDiv = document.getElementById('attorneyResults');
-            
-            // Simulate attorney search results
-            resultsDiv.innerHTML = `
-                <div class="space-y-4">
-                    <h4 class="font-semibold text-gray-800 mb-4">Found 3 attorneys in ${location}</h4>
-                    
-                    <div class="bg-white p-4 rounded-lg border border-gray-200">
-                        <div class="flex justify-between items-start mb-2">
-                            <h5 class="font-medium text-gray-800">Sarah Johnson, Esq.</h5>
-                            <span class="text-sm bg-green-100 text-green-800 px-2 py-1 rounded">⭐ 4.9</span>
-                        </div>
-                        <p class="text-sm text-gray-600 mb-2">Tenant Rights Specialist • 8 years experience</p>
-                        <p class="text-sm text-gray-600 mb-3">Specializes in ${issue.replace('-', ' ')} cases</p>
-                        <div class="flex space-x-2">
-                            <button class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Contact</button>
-                            <button class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">View Profile</button>
-                        </div>
-                    </div>
-                    
-                    <div class="bg-white p-4 rounded-lg border border-gray-200">
-                        <div class="flex justify-between items-start mb-2">
-                            <h5 class="font-medium text-gray-800">Legal Aid Society</h5>
-                            <span class="text-sm bg-green-100 text-green-800 px-2 py-1 rounded">Pro Bono</span>
-                        </div>
-                        <p class="text-sm text-gray-600 mb-2">Free legal services for qualifying tenants</p>
-                        <p class="text-sm text-gray-600 mb-3">Income restrictions may apply</p>
-                        <div class="flex space-x-2">
-                            <button class="text-xs bg-green-600 text-white px-3 py-1 rounded hover:bg-green-700">Apply</button>
-                            <button class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">Learn More</button>
-                        </div>
-                    </div>
-                    
-                    <div class="bg-white p-4 rounded-lg border border-gray-200">
-                        <div class="flex justify-between items-start mb-2">
-                            <h5 class="font-medium text-gray-800">Michael Chen, Esq.</h5>
-                            <span class="text-sm bg-blue-100 text-blue-800 px-2 py-1 rounded">⭐ 4.7</span>
-                        </div>
-                        <p class="text-sm text-gray-600 mb-2">Housing Law Attorney • 12 years experience</p>
-                        <p class="text-sm text-gray-600 mb-3">Free consultation available</p>
-                        <div class="flex space-x-2">
-                            <button class="text-xs bg-blue-600 text-white px-3 py-1 rounded hover:bg-blue-700">Schedule</button>
-                            <button class="text-xs bg-gray-200 text-gray-700 px-3 py-1 rounded hover:bg-gray-300">View Profile</button>
-                        </div>
-                    </div>
-                </div>
-            `;
+            resultsDiv.innerHTML = '<p class="text-gray-500">Searching legal resources with AI...</p>';
+
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        mode: 'legal-advice',
+                        message: `A tenant in ${location} needs help with: ${issue.replace(/-/g, ' ')}. Budget: ${budget || 'flexible'}.\n\nList 4-6 specific ways to find real legal help: (1) tenant rights attorneys, (2) local bar association lawyer referral services, (3) legal aid / pro bono organizations, (4) law school clinics, (5) government tenant hotlines if applicable.\nFor each, give: organization type, how to find/contact them, what to ask, and typical cost range.\nFormat as numbered sections. This is educational only — not a guarantee any specific attorney exists.`
+                    })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || data.details || 'Search failed');
+
+                resultsDiv.innerHTML = `
+                    <div class="space-y-4">
+                        <h4 class="font-semibold text-gray-800">Legal help options in ${escapeHtml(location)}</h4>
+                        <div class="whitespace-pre-wrap text-sm text-gray-800 bg-white p-4 rounded-lg border">${escapeHtml(data.response || '')}</div>
+                        <p class="text-xs text-amber-700 p-2 bg-amber-50 rounded">⚠️ Educational guidance only — verify all contacts independently. RoomFinderAI does not endorse specific attorneys.</p>
+                    </div>`;
+            } catch (err) {
+                resultsDiv.innerHTML = `<p class="text-red-600">${escapeHtml(err.message)}</p>`;
+            }
         }
 
-        // Utility Functions
-        function copyDocument() {
-            // Implementation for copying document
-            console.log('Copy document');
-        }
-
-        function downloadDocument() {
-            // Implementation for downloading document as PDF
-            console.log('Download document');
+        async function showLegalResource(title, prompt) {
+            const panel = document.getElementById('legalResourceResults');
+            if (!panel) return;
+            panel.classList.remove('hidden');
+            panel.innerHTML = `<h3 class="text-xl font-bold mb-4">${escapeHtml(title)}</h3><p class="text-gray-500">Loading...</p>`;
+            panel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            try {
+                const response = await fetch('/api/chat', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ mode: 'legal-advice', message: prompt })
+                });
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'Request failed');
+                panel.innerHTML = `
+                    <h3 class="text-xl font-bold mb-4">${escapeHtml(title)}</h3>
+                    <div class="whitespace-pre-wrap text-sm text-gray-800">${escapeHtml(data.response || '')}</div>
+                    <p class="text-xs text-amber-700 mt-4 p-2 bg-amber-50 rounded">⚠️ General information only — not legal advice. Consult a licensed attorney for your situation.</p>`;
+            } catch (err) {
+                panel.innerHTML = `<p class="text-red-600">${escapeHtml(err.message)}</p>`;
+            }
         }
 
         function browseForms() {
-            // Implementation for browsing forms
-            console.log('Browse forms');
+            showTab('resources');
+            showLegalResource('Free Legal Forms Guide',
+                'List the most important free legal forms for tenants and renters: lease agreement template, security deposit receipt, notice to landlord for repairs, complaint letter, move-in/move-out checklist, sublease agreement. For each form: what it is for, key fields to include, and when to use it. Format as a clear reference guide.');
         }
 
         function browseStateLaws() {
-            // Implementation for browsing state laws
-            console.log('Browse state laws');
+            const jurisdiction = document.getElementById('jurisdictionSelect')?.value || 'general US/Canada';
+            showTab('resources');
+            showLegalResource('Tenant Rights & State/Provincial Laws',
+                `Provide an educational overview of tenant rights for jurisdiction: ${jurisdiction}. Cover: security deposit limits and return timelines, eviction notice requirements, rent increase rules, repair and habitability rights, entry notice requirements, and fair housing protections. Note differences where US states vs Canadian provinces apply.`);
         }
 
-        function useCalculators() {
-            showTab('calculator');
+        function readLegalNews() {
+            showTab('resources');
+            showLegalResource('Recent Housing Law Trends',
+                'Summarize current major trends in rental housing law (2025-2026): rent control expansions, tenant protection bills, security deposit reforms, short-term rental regulations, and AI/fair housing considerations. Educational overview for tenants and landlords — note this is general and users should verify locally.');
+        }
+
+        function browseFAQ() {
+            showTab('resources');
+            showLegalResource('Tenant Legal FAQ',
+                'Answer these common tenant legal questions in FAQ format (question then answer): Can my landlord enter without notice? What can I do if repairs are not made? How do I get my security deposit back? Can I break my lease early? What are my rights if facing eviction? Are verbal lease agreements enforceable? How do roommate agreements work? Keep answers concise and practical.');
+        }
+        function copyDocument() {
+            if (!lastGeneratedDocument) {
+                alert('Generate a document first');
+                return;
+            }
+            navigator.clipboard.writeText(lastGeneratedDocument).then(() => alert('Copied to clipboard'));
+        }
+
+        function downloadDocument() {
+            if (!lastGeneratedDocument) {
+                alert('Generate a document first');
+                return;
+            }
+            const blob = new Blob([lastGeneratedDocument], { type: 'text/plain' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `roomfinderai-document-${Date.now()}.txt`;
+            a.click();
+            URL.revokeObjectURL(url);
         }
 
         function findAttorney() {
             showTab('attorney');
         }
 
-        function readLegalNews() {
-            // Implementation for reading legal news
-            console.log('Read legal news');
-        }
-
-        function browseFAQ() {
-            // Implementation for browsing FAQ
-            console.log('Browse FAQ');
+        function useCalculators() {
+            showTab('calculator');
         }
 
         // Initialize page

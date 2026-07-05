@@ -22,7 +22,8 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   
   <!-- Auth helpers (loaded after Supabase library) -->
-  <script src="/supabase-auth-only.js"></script><!-- Auth handled by supabase-auth-only.js -->
+  <script src="/supabase-auth-only.js"></script>
+  <script src="/universal-auth-manager.js"></script>
   <!-- Google Identity Services -->
   <script src="https://accounts.google.com/gsi/client" async defer></script>
   <!-- Apple Sign-In -->
@@ -32,7 +33,7 @@
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css"/>
 
   <!-- Unified CSS System - No Inline Styles -->
-  <link rel="stylesheet" href="/frontend/modules/css/main.css"/>
+    <link rel="stylesheet" href="/modules/css/main.css"/>
 
   <style>
     /* Page-specific: Auth container styling */
@@ -186,7 +187,7 @@
 
           <!-- Forgot password -->
           <div id="loginOptions" class="flex items-center justify-end">
-            <a href="/forgot-password" class="text-sm text-purple-600 hover:text-purple-800 font-medium">Forgot password?</a>
+            <a href="forgot-password.html" class="text-sm text-purple-600 hover:text-purple-800 font-medium">Forgot password?</a>
           </div>
 
           <!-- Primary action -->
@@ -365,10 +366,13 @@
             // Merge backend data with local data (backend takes priority for profile image)
             let finalUser;
             
+            // Backend returns the user's DB id at result.userId (RoomPal + messaging need it).
+            const backendUserId = result.userId || backendUser.id || null;
             if (existingLocal) {
               // Merge: Use backend profile image if available, otherwise keep local
               finalUser = {
                 ...existingLocal,
+                id: backendUserId || existingLocal.id,
                 firstName: backendUser.firstName || existingLocal.firstName,
                 lastName: backendUser.lastName || existingLocal.lastName,
                 email: email,
@@ -379,6 +383,7 @@
             } else {
               // No local data - use backend data or create new
               finalUser = {
+                id: backendUserId,
                 firstName: backendUser.firstName || 'User',
                 lastName: backendUser.lastName || 'Name',
                 email: email,
@@ -403,7 +408,11 @@
             localStorage.setItem('users', JSON.stringify(users));
             localStorage.setItem('currentUser', JSON.stringify(finalUser));
             
-            window.location.href='verification-modal.html?redirect=index.html';
+            if (window.UniversalAuth && UniversalAuth.redirectAfterLogin) {
+              UniversalAuth.redirectAfterLogin('index.html');
+            } else {
+              window.location.href = 'verification-modal.html?redirect=index.html';
+            }
           }else{
             alert(result.error || 'Login failed');
           }
@@ -475,6 +484,7 @@
           const existingUser = users.find(u=>u?.email?.toLowerCase()===pendingUserData.email.toLowerCase());
           
           const user = { 
+            id: result.user?.id || existingUser?.id || null,
             firstName:pendingUserData.firstName, 
             lastName:pendingUserData.lastName, 
             email:pendingUserData.email, 
@@ -497,7 +507,11 @@
           localStorage.setItem('users', JSON.stringify(users));
           localStorage.setItem('currentUser', JSON.stringify(user));
           alert('Email verified successfully! Welcome to RoomFinder AI.');
-          window.location.href='verification-modal.html?redirect=index.html';
+          if (window.UniversalAuth && UniversalAuth.redirectAfterLogin) {
+            UniversalAuth.redirectAfterLogin('index.html');
+          } else {
+            window.location.href = 'verification-modal.html?redirect=index.html';
+          }
         }else{
           alert(result.error || 'Verification failed');
         }
@@ -617,7 +631,11 @@
           const i = users.findIndex(u=>u?.email?.toLowerCase()===userWithCustomPfp.email?.toLowerCase());
           if (i>=0) users[i]=userWithCustomPfp; else users.push(userWithCustomPfp);
           localStorage.setItem('users', JSON.stringify(users));
-          window.location.href='verification-modal.html?redirect=index.html';
+          if (window.UniversalAuth && UniversalAuth.redirectAfterLogin) {
+            UniversalAuth.redirectAfterLogin('index.html');
+          } else {
+            window.location.href = 'verification-modal.html?redirect=index.html';
+          }
         }else{
           alert(result.error || 'Google Sign-In failed');
         }
@@ -640,7 +658,11 @@
           const i = users.findIndex(u=>u?.email?.toLowerCase()===userWithCustomPfp.email?.toLowerCase());
           if (i>=0) users[i]=userWithCustomPfp; else users.push(userWithCustomPfp);
           localStorage.setItem('users', JSON.stringify(users));
-          window.location.href='verification-modal.html?redirect=index.html';
+          if (window.UniversalAuth && UniversalAuth.redirectAfterLogin) {
+            UniversalAuth.redirectAfterLogin('index.html');
+          } else {
+            window.location.href = 'verification-modal.html?redirect=index.html';
+          }
         }else{
           console.error('OAuth code exchange failed:', result);
           alert(result.error || 'Google Sign-In failed');
@@ -698,7 +720,11 @@
           const i = users.findIndex(u=>u?.email?.toLowerCase()===result.user.email?.toLowerCase());
           if (i>=0) users[i]=result.user; else users.push(result.user);
           localStorage.setItem('users', JSON.stringify(users));
-          window.location.href='verification-modal.html?redirect=index.html';
+          if (window.UniversalAuth && UniversalAuth.redirectAfterLogin) {
+            UniversalAuth.redirectAfterLogin('index.html');
+          } else {
+            window.location.href = 'verification-modal.html?redirect=index.html';
+          }
         }else{
           alert(result.error || 'Apple Sign-In failed');
         }
