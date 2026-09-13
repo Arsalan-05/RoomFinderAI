@@ -56,15 +56,15 @@ class RoomPalApp {
         await this.loadUserProfile();
         this.updateProfileCTA();
 
+        // The marketplace is public. This used to hide the entire people list
+        // unless you were logged in AND already had a roommate profile, so a
+        // first-time visitor landed on a page with nobody on it — exactly the
+        // person you need to show the marketplace to. The profile requirement
+        // still stands, but it is enforced at the point of contact
+        // (openPersonContact) rather than by hiding everyone.
         const listSection = document.getElementById('roommateListSection');
-        if (!this.currentUser || !this.hasUserProfile) {
-            if (listSection) listSection.classList.add('hidden');
-            const loading = document.getElementById('landingLoadingState');
-            if (loading) loading.classList.add('hidden');
-        } else {
-            if (listSection) listSection.classList.remove('hidden');
-            await this.loadLandingProfiles();
-        }
+        if (listSection) listSection.classList.remove('hidden');
+        await this.loadLandingProfiles();
 
         console.log('RoomPal Smart Matching initialized');
     }
@@ -125,14 +125,34 @@ class RoomPalApp {
                 : '';
         }
 
+        // The five questions are selects on this form now, not buttons in a
+        // modal, so editing sets their values directly. selectOption and
+        // selectScore drove the old modal's buttons and had nothing to act on
+        // here, which would have reset somebody's answers every time they
+        // edited anything else.
+        const setSelect = (name, value) => {
+            if (value == null || value === '') return;
+            const el = form.querySelector(`[name="${name}"]`);
+            if (el) el.value = value;
+        };
+
         if (p.lifestyle) {
-            if (p.lifestyle.sleepSchedule) this.selectOption('sleep', p.lifestyle.sleepSchedule);
-            if (p.lifestyle.smoking) this.selectOption('smoking', p.lifestyle.smoking);
-            if (p.lifestyle.pets) this.selectOption('pets', p.lifestyle.pets);
+            setSelect('sleepSchedule', p.lifestyle.sleepSchedule);
+            setSelect('smoking', p.lifestyle.smoking);
+            setSelect('pets', p.lifestyle.pets);
         }
-        if (p.compatibility_scores) {
-            if (p.compatibility_scores.cleanliness != null) this.selectScore('cleanliness', p.compatibility_scores.cleanliness);
-            if (p.compatibility_scores.socialLevel != null) this.selectScore('social', p.compatibility_scores.socialLevel);
+
+        // Back from the numbers matching stores to the words the form shows.
+        const scores = p.compatibility_scores || {};
+        const nearest = (value, table) => {
+            if (value == null) return null;
+            return Object.keys(table).reduce((best, key) =>
+                Math.abs(table[key] - value) < Math.abs(table[best] - value) ? key : best);
+        };
+        setSelect('cleanliness', nearest(scores.cleanliness, { 'very-clean': 9, 'clean': 7, 'relaxed': 4 }));
+        setSelect('socialLevel', nearest(scores.socialLevel, { 'social': 8, 'balanced': 5, 'quiet': 2 }));
+        if (!p.lifestyle?.sleepSchedule) {
+            setSelect('sleepSchedule', nearest(scores.sleepSchedule, { 'early': 2, 'moderate': 5, 'night-owl': 8 }));
         }
 
         const submitBtn = form.querySelector('button[type="submit"]');
@@ -179,19 +199,17 @@ class RoomPalApp {
                     this.allPeople = await this.api.getSeekerProfiles({}) || [];
                     console.log('Fetched seeker profiles:', this.allPeople.length);
                 } else {
-                    console.warn('API not initialized, using demo profiles');
-                    this.allPeople = this.getDemoProfiles();
+                    console.warn('Roommate API not initialized — showing no profiles rather than fabricating them');
+                    this.allPeople = [];
                 }
             } else {
-                console.warn('No API instance available, using demo profiles');
-                this.allPeople = this.getDemoProfiles();
+                console.warn('No roommate API instance available');
+                this.allPeople = [];
             }
 
-            // If database returned empty, show demo profiles so page isn't blank
-            if (this.allPeople.length === 0) {
-                console.log('No profiles in database, showing demo profiles');
-                this.allPeople = this.getDemoProfiles();
-            }
+            // Deliberately no demo fallback: this is a live marketplace, and six
+            // hardcoded strangers presented as real people is worse than an
+            // honest empty state.
 
             // Filter out current user
             if (this.currentUser) {
@@ -473,9 +491,18 @@ class RoomPalApp {
     createMatchCard(person) {
         const avatarUrl = person.avatar_url || `https://ui-avatars.com/api/?name=${encodeURIComponent(person.name || 'User')}&background=6366f1&color=fff&size=160`;
         const name = person.name || 'Anonymous';
-        const location = person.preferred_areas?.[0] || 'Location flexible';
+        // Someone advertising a room states where the room IS (room_location);
+        // a seeker states where they WANT to live (preferred_areas).
+        const location = (person.user_type === 'has_spot'
+            ? (person.room_location || person.preferred_areas?.[0])
+            : person.preferred_areas?.[0]) || 'Location flexible';
+        const isHost = person.user_type === 'has_spot';
+        const typeLabel = isHost ? 'Has a room' : 'Looking for a room';
+        const typeClass = isHost ? 'bg-emerald-50 text-emerald-700' : 'bg-indigo-50 text-indigo-700';
         const budgetMax = person.budget_max || 0;
-        const budgetText = budgetMax ? `Up to $${budgetMax}/mo` : 'Budget flexible';
+        const budgetText = isHost && person.room_rent
+            ? `$${person.room_rent}/mo`
+            : (budgetMax ? `Up to $${budgetMax}/mo` : 'Budget flexible');
         const bio = person.bio || 'Looking for a great roommate!';
         const truncatedBio = bio.length > 80 ? bio.substring(0, 80) + '...' : bio;
         const moveInDate = person.move_in_date ? this.formatDate(person.move_in_date) : 'Flexible';
@@ -499,10 +526,17 @@ class RoomPalApp {
 
         return `
             <div class="bg-white rounded-2xl shadow-sm border hover:shadow-lg transition-all duration-300 overflow-hidden">
-                <!-- Match Score Badge -->
+                <!-- Match Score Badge. Only shown when we can actually compute it:
+                     without the viewer's own profile calculateMatchScore() returns
+                     Math.random()*30+60, and a fabricated percentage is worse than
+                     no percentage. Everyone still sees who the person is. -->
                 <div class="relative">
+                    ${this.hasUserProfile ? `
                     <div class="absolute top-3 right-3 ${matchColor} text-white px-3 py-1 rounded-full text-sm font-bold shadow-md">
                         ${matchScore}% Match
+                    </div>` : ''}
+                    <div class="absolute top-3 left-3 ${typeClass} px-2.5 py-1 rounded-full text-xs font-semibold shadow-sm">
+                        ${typeLabel}
                     </div>
                     <div class="h-24 bg-gradient-to-br from-indigo-400 to-purple-500"></div>
                     <img src="${avatarUrl}" alt="${name}" class="w-20 h-20 rounded-full border-4 border-white absolute -bottom-10 left-1/2 -translate-x-1/2 object-cover" onerror="this.src='https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=6366f1&color=fff&size=160'">
@@ -547,7 +581,7 @@ class RoomPalApp {
                         ? `<span class="inline-block w-full text-center py-2.5 text-amber-600 bg-amber-50 rounded-xl text-sm font-medium">Demo Profile</span>`
                         : `<div class="flex gap-2">
                             <button type="button" onclick="roomPalApp.showRoommateDetail('${person.user_id || person.id}')" class="flex-1 border border-indigo-300 text-indigo-700 py-2.5 rounded-xl font-semibold hover:bg-indigo-50 transition-all">View</button>
-                            <button type="button" onclick="roomPalApp.openPersonContact('${person.user_id || person.id}', '${name.replace(/'/g, "\\'")}')" class="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-2.5 rounded-xl font-semibold hover:from-indigo-600 hover:to-purple-700 transition-all">Connect</button>
+                            <button type="button" onclick="roomPalApp.openPersonContact('${person.id || person.user_id}', '${name.replace(/'/g, "\\'")}')" class="flex-1 bg-gradient-to-r from-indigo-500 to-purple-600 text-white py-2.5 rounded-xl font-semibold hover:from-indigo-600 hover:to-purple-700 transition-all">Connect</button>
                            </div>`
                     }
                 </div>
@@ -592,19 +626,15 @@ class RoomPalApp {
                     this.landingProfiles = await this.api.getSeekerProfiles({}) || [];
                     console.log('Fetched landing profiles:', this.landingProfiles.length);
                 } else {
-                    console.warn('API not initialized, using demo profiles for landing');
-                    this.landingProfiles = this.getDemoProfiles();
+                    console.warn('Roommate API not initialized — landing list empty');
+                    this.landingProfiles = [];
                 }
             } else {
-                console.warn('No API instance available, using demo profiles for landing');
-                this.landingProfiles = this.getDemoProfiles();
+                console.warn('No roommate API instance available for landing');
+                this.landingProfiles = [];
             }
 
-            // If database returned empty, show demo profiles
-            if (this.landingProfiles.length === 0) {
-                console.log('No profiles in database, showing demo profiles on landing');
-                this.landingProfiles = this.getDemoProfiles();
-            }
+            // No demo fallback here either — see loadRoommateMatches().
 
             // Filter out current user
             if (this.currentUser) {
@@ -686,20 +716,46 @@ class RoomPalApp {
     }
 
     applyLandingFilters() {
+        const textFilter = (document.getElementById('landingSearchFilter')?.value || '').trim().toLowerCase();
         const cityFilter = document.getElementById('landingCityFilter')?.value || '';
         const budgetFilter = document.getElementById('landingBudgetFilter')?.value || '';
         const lifestyleFilter = document.getElementById('landingLifestyleFilter')?.value || '';
+        const typeFilter = document.querySelector('.rp-type-btn.active')?.dataset.type || '';
 
         // Start with all profiles
         this.landingProfiles = [...(this.allLandingProfiles || [])];
 
         // Filter
         this.landingProfiles = this.landingProfiles.filter(person => {
-            // City filter
-            if (cityFilter) {
-                const areas = (person.preferred_areas || []).join(' ').toLowerCase();
-                if (!areas.includes(cityFilter.toLowerCase())) return false;
+            // Free text first, across everything worth matching on. The city
+            // box below only looks at areas and room location, so a name or a
+            // word from someone's bio could not be searched at all.
+            if (textFilter) {
+                const words = textFilter.split(/\s+/).filter(Boolean);
+                const hay = [
+                    person.name,
+                    person.bio,
+                    person.room_location,
+                    person.room_description,
+                    (person.preferred_areas || []).join(' ')
+                ].filter(Boolean).join(' ').toLowerCase();
+                if (!words.every(w => hay.includes(w))) return false;
             }
+
+            // City / area, free text. The old dropdown offered six fixed
+            // Canadian cities and only searched preferred_areas, so real entries
+            // like "Downtown Toronto" or a room advertised in Vancouver via
+            // room_location were unreachable. Match either field.
+            if (cityFilter) {
+                const haystack = [
+                    (person.preferred_areas || []).join(' '),
+                    person.room_location || ''
+                ].join(' ').toLowerCase();
+                if (!haystack.includes(cityFilter.trim().toLowerCase())) return false;
+            }
+
+            // Who they are: seeking a room, or advertising one.
+            if (typeFilter && person.user_type !== typeFilter) return false;
 
             // Budget filter
             if (budgetFilter) {
@@ -732,6 +788,11 @@ class RoomPalApp {
     }
 
     clearLandingFilters() {
+        const textFilter = document.getElementById('landingSearchFilter');
+        const heroSearch = document.getElementById('heroPeopleSearch');
+        if (textFilter) textFilter.value = '';
+        if (heroSearch) heroSearch.value = '';
+
         const cityFilter = document.getElementById('landingCityFilter');
         const budgetFilter = document.getElementById('landingBudgetFilter');
         const lifestyleFilter = document.getElementById('landingLifestyleFilter');
@@ -823,7 +884,7 @@ class RoomPalApp {
                 <li><strong>Areas:</strong> ${(person.preferred_areas || []).join(', ') || 'Flexible'}</li>
                 <li><strong>Move-in:</strong> ${person.move_in_date ? this.formatDate(person.move_in_date) : 'Flexible'}</li>
             </ul>
-            <button type="button" class="btn-primary w-full mt-6" onclick="roomPalApp.openPersonContact('${person.user_id || person.id}', '${name.replace(/'/g, "\\'")}'); roomPalApp.closeRoommateDetail();">Message</button>
+            <button type="button" class="btn-primary w-full mt-6" onclick="roomPalApp.openPersonContact('${person.id || person.user_id}', '${name.replace(/'/g, "\\'")}'); roomPalApp.closeRoommateDetail();">Message</button>
         `;
         modal.classList.remove('hidden');
         modal.classList.add('flex');
@@ -933,8 +994,10 @@ class RoomPalApp {
 
     async loadRooms() {
         const grid = document.getElementById('roomsGrid');
-        const emptyState = document.getElementById('emptyState');
-        const resultsCount = document.getElementById('resultsCount');
+        const emptyState = document.getElementById('emptyState')
+            || document.getElementById('matchEmptyState');
+        const resultsCount = document.getElementById('resultsCount')
+            || document.getElementById('matchResultsCount');
 
         if (!grid) return;
 
@@ -969,20 +1032,29 @@ class RoomPalApp {
     }
 
     renderRooms() {
+        // #emptyState and #resultsCount do not exist in roommate-matching.html
+        // (it has matchEmptyState / landingEmptyState / matchResultsCount), so
+        // both branches below used to throw on null before any card was
+        // painted. loadRooms()'s catch swallowed it and showed "Failed to load
+        // rooms" even when rows came back. Guarded, with the real ids tried.
         const grid = document.getElementById('roomsGrid');
-        const emptyState = document.getElementById('emptyState');
-        const resultsCount = document.getElementById('resultsCount');
+        const emptyState = document.getElementById('emptyState')
+            || document.getElementById('matchEmptyState');
+        const resultsCount = document.getElementById('resultsCount')
+            || document.getElementById('matchResultsCount');
+
+        if (!grid) return;
 
         if (this.filteredRooms.length === 0) {
             grid.classList.add('hidden');
-            emptyState.classList.remove('hidden');
-            resultsCount.textContent = 'No rooms found';
+            if (emptyState) emptyState.classList.remove('hidden');
+            if (resultsCount) resultsCount.textContent = 'No rooms found';
             return;
         }
 
         grid.classList.remove('hidden');
-        emptyState.classList.add('hidden');
-        resultsCount.textContent = `${this.filteredRooms.length} room${this.filteredRooms.length !== 1 ? 's' : ''} available`;
+        if (emptyState) emptyState.classList.add('hidden');
+        if (resultsCount) resultsCount.textContent = `${this.filteredRooms.length} room${this.filteredRooms.length !== 1 ? 's' : ''} available`;
 
         grid.innerHTML = this.filteredRooms.map(room => this.createRoomCard(room)).join('');
     }
@@ -1011,7 +1083,7 @@ class RoomPalApp {
                     <p class="room-description mb-4">${description}</p>
                     ${isOwnRoom
                         ? `<span class="inline-block w-full text-center py-2 text-gray-500 bg-gray-100 rounded-lg">Your Listing</span>`
-                        : `<button onclick="roomPalApp.openContact('${room.user_id}', '${hostName}')" class="btn-primary w-full">Contact ${hostName}</button>`
+                        : `<button onclick="roomPalApp.openContact('${room.id || room.user_id}', '${hostName}')" class="btn-primary w-full">Contact ${hostName}</button>`
                     }
                 </div>
             </div>
@@ -1042,9 +1114,13 @@ class RoomPalApp {
     // ==================== LOAD PEOPLE ====================
 
     async loadPeople() {
-        const grid = document.getElementById('peopleGrid');
-        const emptyState = document.getElementById('peopleEmptyState');
-        const resultsCount = document.getElementById('peopleResultsCount');
+        const grid = document.getElementById('peopleGrid')
+            || document.getElementById('allSeekersGrid')
+            || document.getElementById('seekersGrid');
+        const emptyState = document.getElementById('peopleEmptyState')
+            || document.getElementById('landingEmptyState');
+        const resultsCount = document.getElementById('peopleResultsCount')
+            || document.getElementById('landingResultsCount');
 
         if (!grid) return;
 
@@ -1087,9 +1163,13 @@ class RoomPalApp {
     }
 
     renderPeople() {
-        const grid = document.getElementById('peopleGrid');
-        const emptyState = document.getElementById('peopleEmptyState');
-        const resultsCount = document.getElementById('peopleResultsCount');
+        const grid = document.getElementById('peopleGrid')
+            || document.getElementById('allSeekersGrid')
+            || document.getElementById('seekersGrid');
+        const emptyState = document.getElementById('peopleEmptyState')
+            || document.getElementById('landingEmptyState');
+        const resultsCount = document.getElementById('peopleResultsCount')
+            || document.getElementById('landingResultsCount');
 
         if (this.filteredPeople.length === 0) {
             grid.classList.add('hidden');
@@ -1157,7 +1237,7 @@ class RoomPalApp {
                     <p class="person-bio">${truncatedBio}</p>
                     ${this.currentUser && person.user_id === this.currentUser.id
                         ? `<span class="inline-block w-full text-center py-2 text-gray-500 bg-gray-100 rounded-lg text-sm">Your Profile</span>`
-                        : `<button onclick="roomPalApp.openPersonContact('${person.user_id}', '${name.replace(/'/g, "\\'")}')" class="btn-connect">Connect</button>`
+                        : `<button onclick="roomPalApp.openPersonContact('${person.id || person.user_id}', '${name.replace(/'/g, "\\'")}')" class="btn-connect">Connect</button>`
                     }
                 </div>
             </div>
@@ -1265,6 +1345,22 @@ class RoomPalApp {
             window.location.href = 'login.html';
             return;
         }
+
+        // The profile requirement used to be enforced by hiding the entire
+        // people list. Now that the marketplace is public, it has to be stated
+        // here: you can browse freely, but you need a profile of your own
+        // before messaging someone — they need to see who is contacting them.
+        if (!this.hasUserProfile) {
+            this.pendingContact = { personId, personName };
+            alert(`Create your roommate profile first so ${personName} can see who you are. It takes a minute.`);
+            this.showSection('seeking');
+            const tab = document.querySelector('[data-seeking-tab="createProfile"]');
+            if (tab) tab.click();
+            const form = document.getElementById('quickProfileForm');
+            if (form) form.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            return;
+        }
+
         window.startFloatingChatWith(personId, personName);
     }
 
@@ -1464,17 +1560,26 @@ class RoomPalApp {
             move_in_date: formData.get('move_in_date') || null,
             bio: formData.get('bio') || '',
             avatar_url: this.uploadedPhoto || null,
+            // Read straight off the form, which now carries these questions
+            // itself. They used to come from this.profileFormData, filled by a
+            // separate modal that never saved anything — and under different
+            // keys than the ones read here (`sleep` vs `sleepSchedule`,
+            // `social` vs `socialLevel`), so two of the five arrived undefined
+            // even when the modal had been filled in.
             lifestyle: {
-                sleepSchedule: this.profileFormData.sleep,
-                smoking: this.profileFormData.smoking,
-                pets: this.profileFormData.pets,
-                petsOk: this.profileFormData.pets === 'Pets OK' || this.profileFormData.pets === 'Have Pets',
-                hasPets: this.profileFormData.pets === 'Have Pets'
+                sleepSchedule: formData.get('sleepSchedule') || null,
+                smoking: formData.get('smoking') || null,
+                pets: formData.get('pets') || null,
+                petsOk: ['love', 'ok', 'have'].includes(formData.get('pets')),
+                hasPets: formData.get('pets') === 'have'
             },
+            // Numbers, because matching compares them. The words on the form
+            // are what a person says; these are what the comparison needs.
             compatibility_scores: {
-                cleanliness: this.profileFormData.cleanliness,
-                socialLevel: this.profileFormData.social,
-                petPolicy: this.profileFormData.pets === 'No Pets' ? 1 : (this.profileFormData.pets === 'Pets OK' || this.profileFormData.pets === 'Have Pets' ? 8 : 5)
+                cleanliness: ({ 'very-clean': 9, 'clean': 7, 'relaxed': 4 })[formData.get('cleanliness')] ?? null,
+                socialLevel: ({ 'social': 8, 'balanced': 5, 'quiet': 2 })[formData.get('socialLevel')] ?? null,
+                sleepSchedule: ({ 'early': 2, 'moderate': 5, 'night-owl': 8 })[formData.get('sleepSchedule')] ?? null,
+                petPolicy: formData.get('pets') === 'no' ? 1 : (['love', 'ok', 'have'].includes(formData.get('pets')) ? 8 : 5)
             }
         };
 
@@ -1502,6 +1607,18 @@ class RoomPalApp {
             this.showToast(isEditing ? 'Profile updated!' : 'Profile created! Finding your matches...', 'success');
 
             await this.loadRoommateMatches();
+            await this.loadLandingProfiles();
+
+            // If they were sent here by clicking Contact, take them straight to
+            // that conversation rather than making them find the person again.
+            if (this.pendingContact) {
+                const { personId, personName } = this.pendingContact;
+                this.pendingContact = null;
+                this.showSection('landing');
+                if (typeof window.startFloatingChatWith === 'function') {
+                    window.startFloatingChatWith(personId, personName);
+                }
+            }
 
         } catch (error) {
             console.error('Error creating profile:', error);
@@ -1620,6 +1737,33 @@ function clearLandingFilters() {
         window.roomPalApp.clearLandingFilters();
     }
 }
+
+/**
+ * Takes the hero's search box down to the people it searches.
+ *
+ * Instant, not smooth: something on this page cancels a smooth scroll outright
+ * - measured, an instant scroll to 900 arrives and a smooth one to the same
+ * place ends back at 0 - so the button filtered the list and then appeared to
+ * do nothing at all.
+ */
+function jumpToBrowse() {
+    var hero = document.getElementById('heroPeopleSearch');
+    var field = document.getElementById('landingSearchFilter');
+
+    if (hero && field) {
+        field.value = hero.value;
+        applyLandingFilters();
+    }
+
+    var target = document.getElementById('landingProfilesGrid')
+        || document.getElementById('landingResultsCount');
+    if (target) {
+        // The header is fixed, so scrollIntoView alone puts the first row under it.
+        var top = target.getBoundingClientRect().top + window.pageYOffset - 140;
+        window.scrollTo({ top: top, behavior: 'auto' });
+    }
+}
+
 
 // Initialize
 document.addEventListener('DOMContentLoaded', () => {

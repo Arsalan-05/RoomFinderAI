@@ -1,19 +1,36 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="RoomFinderAI">
+    <meta property="og:title" content="Rooms for rent — RoomFinderAI">
+    <meta property="og:description" content="A room for rent on RoomFinderAI. Browse photos, price and location, and message the person renting it. Free to browse and free to post.">
+    <meta property="og:url" content="https://www.roomfinderai.com/listing_details.html">
+    <meta property="og:image" content="https://www.roomfinderai.com/android-chrome-512x512.png">
+    <meta property="og:locale" content="en_CA">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Rooms for rent — RoomFinderAI">
+    <meta name="twitter:description" content="A room for rent on RoomFinderAI. Browse photos, price and location, and message the person renting it. Free to browse and free to post.">
+    <meta name="twitter:image" content="https://www.roomfinderai.com/android-chrome-512x512.png">
+    <meta name="apple-itunes-app" content="app-id=6802455334">
+    <meta name="robots" content="noindex, follow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <title>RoomFinderAI - Listing Details</title>
 
     <!-- Google AdSense -->
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5195773691165769"
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3388740864153708"
          crossorigin="anonymous"></script>
 
     <!-- Universal Authentication -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="js/supabase-config-init.js"></script>
     <script src="universal-auth-protection.js"></script>
+    <script src="/js/profiles-client.js?v=20260817"></script>
     <script src="universal-auth-manager.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
 
@@ -29,6 +46,117 @@
     <link rel="stylesheet" href="/modules/css/main.css"/>
 
     
+    <style>
+    /* ---- Gallery ---------------------------------------------------- */
+
+    /* A fixed stage with the photo contained inside it. The image was a bare
+       w-full, so a tall portrait photo pushed the whole column down and a wide
+       one overflowed the card. */
+    /* Sized by the photo, bounded by the viewport.
+       A fixed 4:3 box letterboxed a tall photo into a small strip with wide
+       bars either side, which threw away most of the space and made a good
+       photo look poor. Height now follows the image up to a limit, so a
+       portrait shot is shown properly and a wide one still cannot run away
+       down the page. */
+    .gallery-stage {
+        position: relative;
+        width: 100%;
+        min-height: 340px;
+        max-height: 72vh;
+        background: #0f172a;
+        border-radius: 14px;
+        overflow: hidden;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+    }
+    .gallery-stage .hero-image {
+        max-width: 100%;
+        max-height: 72vh;
+        width: auto;
+        height: auto;
+        object-fit: contain;   /* never crop or distort the room */
+        cursor: zoom-in;
+        display: block;
+    }
+    .gallery-arrow {
+        position: absolute;
+        top: 50%;
+        transform: translateY(-50%);
+        width: 44px; height: 44px;
+        border: none; border-radius: 50%;
+        background: rgba(15, 23, 42, 0.55);
+        color: #fff; font-size: 20px; line-height: 1;
+        cursor: pointer;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.15s ease;
+        z-index: 2;
+    }
+    .gallery-arrow:hover { background: rgba(15, 23, 42, 0.8); }
+    .gallery-arrow-left  { left: 12px; }
+    .gallery-arrow-right { right: 12px; }
+    .gallery-count {
+        position: absolute; bottom: 12px; right: 12px;
+        padding: 4px 10px; border-radius: 999px;
+        background: rgba(15, 23, 42, 0.6);
+        color: #fff; font-size: 12px; z-index: 2;
+    }
+
+    /* Dots rather than a thumbnail strip. The strip repeated every photo
+       underneath the one already on screen, so three uploads looked like four
+       images with the first one duplicated. */
+    .gallery-dots {
+        display: flex;
+        justify-content: center;
+        gap: 8px;
+        margin-top: 14px;
+    }
+    .gallery-dot {
+        width: 9px; height: 9px;
+        padding: 0; border: none; border-radius: 50%;
+        background: #cbd5e1;
+        cursor: pointer;
+        transition: background 0.15s ease, transform 0.15s ease;
+    }
+    .gallery-dot:hover { background: #94a3b8; }
+    .gallery-dot.active { background: #667eea; transform: scale(1.25); }
+
+    /* ---- Full-screen viewer ------------------------------------------ */
+
+    .lightbox {
+        position: fixed; inset: 0;
+        background: rgba(2, 6, 23, 0.94);
+        z-index: 9999;
+        display: none;
+        align-items: center; justify-content: center;
+    }
+    .lightbox.open { display: flex; }
+    .lightbox img {
+        max-width: 94vw; max-height: 92vh;
+        object-fit: contain;   /* keeps the ratio at any window size */
+        cursor: zoom-in;
+        transition: transform 0.2s ease;
+    }
+    .lightbox img.zoomed { transform: scale(2); cursor: zoom-out; }
+    .lightbox-close, .lightbox-arrow {
+        position: absolute;
+        background: rgba(255, 255, 255, 0.12);
+        border: none; color: #fff; cursor: pointer;
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        transition: background 0.15s ease;
+    }
+    .lightbox-close:hover, .lightbox-arrow:hover { background: rgba(255, 255, 255, 0.25); }
+    .lightbox-close { top: 18px; right: 18px; width: 44px; height: 44px; font-size: 26px; }
+    .lightbox-arrow { top: 50%; transform: translateY(-50%); width: 52px; height: 52px; font-size: 24px; }
+    .lightbox-arrow-left  { left: 18px; }
+    .lightbox-arrow-right { right: 18px; }
+
+    @media (max-width: 640px) {
+        .gallery-arrow { width: 38px; height: 38px; }
+        .lightbox-arrow { width: 44px; height: 44px; }
+    }
+    </style>
 </head>
 <body class="flex flex-col min-h-screen">
     <!-- Header -->
@@ -56,7 +184,6 @@
                     </button>
                     <div class="dropdown-menu">
                         <a href="listings.html" class="dropdown-item">Browse Listings</a>
-                        <a href="student-housing.html" class="dropdown-item">Student Housing</a>
                     </div>
                 </div>
 
@@ -103,7 +230,6 @@
                     <a href="roommate-matching.html" class="mobile-menu-item" onclick="closeMobileMenu()">RoomPal</a>
                     <a href="listings.html" class="mobile-menu-item" onclick="closeMobileMenu()">Listings</a>
                     <a href="listings.html" class="mobile-menu-item" onclick="closeMobileMenu()">Browse Listings</a>
-                    <a href="student-housing.html" class="mobile-menu-item" onclick="closeMobileMenu()">Student Housing</a>
                     <a href="ai-negotiator.html" class="mobile-menu-item" onclick="closeMobileMenu()">AI Negotiator</a>
                     <a href="pricing.html" class="mobile-menu-item" onclick="closeMobileMenu()">Pricing</a>
                     <a href="support.html" class="mobile-menu-item" onclick="closeMobileMenu()">Support</a>
@@ -173,6 +299,34 @@
                 return;
             }
 
+
+        /** True when this account has passed ID verification. */
+        /**
+         * Asks the server, rather than the database directly.
+         *
+         * This used to select `status` from user_verifications in the browser.
+         * Two things were wrong with that. There is no `status` column - the
+         * statuses are id_verification_status and face_verification_status - and
+         * row level security hides that table from the anon key anyway, so the
+         * query returned an empty result rather than an error and the badge was
+         * simply never shown. The endpoint below already works out both halves.
+         */
+        async function isOwnerVerified(_supabase, email) {
+            if (!email) return false;
+            try {
+                const res = await fetch(`/api/verify/status/${encodeURIComponent(email)}`);
+                if (!res.ok) return false;
+                const data = await res.json();
+                return data?.isVerified === true;
+            } catch (e) {
+                return false;
+            }
+        }
+
+        function showVerifiedNote() {
+            alert("Verified landlord\n\nWe checked this person's government ID against a selfie before they could post. It does not mean we have inspected the room or vouch for the price.");
+        }
+
             try {
                 const { data: listing, error } = await supabase
                     .from('listings')
@@ -186,11 +340,45 @@
                     return;
                 }
 
+                // Whether the person behind this room had their ID checked.
+                // The listings table does not carry it, so it is looked up by
+                // owner — a badge on the card that disappears on the page the
+                // decision is actually made on is worse than no badge at all.
+                listing.user_verified = await isOwnerVerified(supabase, listing.user_email);
                 renderListing(listing);
             } catch (error) {
                 console.error('Error:', error);
                 showError('Failed to load listing. Please try again.');
             }
+        }
+
+        /**
+         * Joins a listing's address parts into one line.
+         *
+         * Written because listings posted from the Android app render badly
+         * without it. The app collects a single "Address" line and sends it as
+         * BOTH street and city, with no postal code at all, so the old
+         * `${street}, ${city}, ${postalCode}` produced:
+         *
+         *     7280 Airport Rd, 7280 Airport Rd,
+         *
+         * a duplicated address and a dangling comma. Dropping empties fixes the
+         * comma; dropping case-insensitive duplicates fixes the repetition.
+         * Both are worth doing for website listings too - someone typing
+         * "Mississauga" into street and city gets the same result.
+         */
+        function formatListingLocation(listing) {
+            const seen = new Set();
+            return [listing.street, listing.city, listing.postalCode]
+                .map(part => (part == null ? '' : String(part).trim()))
+                .filter(part => {
+                    if (!part) { return false; }
+                    const key = part.toLowerCase();
+                    if (seen.has(key)) { return false; }
+                    seen.add(key);
+                    return true;
+                })
+                .join(', ');
         }
 
         function showError(message) {
@@ -212,10 +400,21 @@
             document.getElementById('page-title').textContent = listing.title;
             document.title = `${listing.title} - RoomFinderAI`;
 
-            // Get images
-            const images = listing.media && listing.media.length > 0
-                ? listing.media.filter(m => m.type && m.type.startsWith('image/'))
-                : [];
+            // Get images.
+            //
+            // media holds two shapes. Listings posted from the website store
+            // objects, { url, type }; listings posted from the iOS app store
+            // plain URL strings. This only understood the object form, so every
+            // room posted from the app rendered "No Image Available" on the web
+            // even though its photo had uploaded perfectly well.
+            const images = (listing.media || [])
+                .map(entry => typeof entry === 'string' ? { url: entry } : entry)
+                .filter(entry => entry && entry.url
+                    && (!entry.type || entry.type.startsWith('image/')));
+
+            // Shared with the arrows and the lightbox.
+            window.galleryImages = images.map(i => i.url);
+            window.galleryIndex = 0;
 
             const mainImage = images.length > 0
                 ? images[0].url
@@ -234,14 +433,22 @@
                     <!-- Left Column - Images -->
                     <div class="lg:col-span-2">
                         <div class="glass-card p-4 mb-6">
-                            <img id="main-image" src="${mainImage}" alt="${listing.title}" class="hero-image w-full">
+                            <div class="gallery-stage">
+                                <img id="main-image" src="${mainImage}" alt="${listing.title}"
+                                     class="hero-image" onclick="openLightbox()">
+                                ${images.length > 1 ? `
+                                    <button class="gallery-arrow gallery-arrow-left" onclick="stepImage(-1)" aria-label="Previous photo">&#10094;</button>
+                                    <button class="gallery-arrow gallery-arrow-right" onclick="stepImage(1)" aria-label="Next photo">&#10095;</button>
+                                    <div class="gallery-count" id="gallery-count">1 / ${images.length}</div>
+                                ` : ''}
+                            </div>
 
                             ${images.length > 1 ? `
-                                <div class="flex gap-3 mt-4 overflow-x-auto pb-2">
+                                <div class="gallery-dots">
                                     ${images.map((img, idx) => `
-                                        <img src="${img.url}" alt="Image ${idx + 1}"
-                                            class="thumbnail ${idx === 0 ? 'active' : ''}"
-                                            onclick="changeImage('${img.url}', this)">
+                                        <button class="gallery-dot ${idx === 0 ? 'active' : ''}"
+                                                onclick="showImage(${idx})"
+                                                aria-label="Photo ${idx + 1}"></button>
                                     `).join('')}
                                 </div>
                             ` : ''}
@@ -260,6 +467,13 @@
                         <div class="glass-card p-6 mb-6">
                             <div class="text-3xl font-bold text-green-600 mb-2">$${listing.price.toLocaleString()}<span class="text-lg text-gray-500 font-normal">/mo</span></div>
                             <h1 class="text-xl font-bold text-gray-800 mb-3">${listing.title}</h1>
+                            ${listing.user_verified ? `
+                            <button type="button" onclick="showVerifiedNote()"
+                                    class="inline-flex items-center gap-1.5 mb-3 px-3 py-1 rounded-full bg-green-50 border border-green-300 text-green-700 text-sm font-semibold hover:bg-green-100 transition"
+                                    title="What does verified mean?">
+                                <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M6.267 3.455a3.066 3.066 0 001.745-.723 3.066 3.066 0 013.976 0 3.066 3.066 0 001.745.723 3.066 3.066 0 012.812 2.812c.051.643.304 1.254.723 1.745a3.066 3.066 0 010 3.976 3.066 3.066 0 00-.723 1.745 3.066 3.066 0 01-2.812 2.812 3.066 3.066 0 00-1.745.723 3.066 3.066 0 01-3.976 0 3.066 3.066 0 00-1.745-.723 3.066 3.066 0 01-2.812-2.812 3.066 3.066 0 00-.723-1.745 3.066 3.066 0 010-3.976 3.066 3.066 0 00.723-1.745 3.066 3.066 0 012.812-2.812zm7.44 5.252a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clip-rule="evenodd"/></svg>
+                                Verified landlord
+                            </button>` : ''}
 
                             <!-- Location -->
                             <div class="flex items-start gap-2 text-gray-600 mb-4">
@@ -267,7 +481,7 @@
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
                                 </svg>
-                                <span>${listing.street}, ${listing.city}${listing.postalCode ? ', ' + listing.postalCode : ''}</span>
+                                <span>${formatListingLocation(listing)}</span>
                             </div>
 
                             <!-- Badges -->
@@ -331,11 +545,74 @@
         }
 
         // Change main image when thumbnail clicked
-        function changeImage(url, thumbnail) {
-            document.getElementById('main-image').src = url;
-            document.querySelectorAll('.thumbnail').forEach(t => t.classList.remove('active'));
-            thumbnail.classList.add('active');
+        // The gallery is index-based rather than url-based so the arrows, the
+        // thumbnails and the lightbox all agree on which photo is showing.
+        function showImage(index) {
+            const images = window.galleryImages || [];
+            if (!images.length) return;
+
+            // Wraps, so the arrows never dead-end on the first or last photo.
+            window.galleryIndex = (index + images.length) % images.length;
+            const url = images[window.galleryIndex];
+
+            const main = document.getElementById('main-image');
+            if (main) main.src = url;
+
+            const counter = document.getElementById('gallery-count');
+            if (counter) counter.textContent = `${window.galleryIndex + 1} / ${images.length}`;
+
+            document.querySelectorAll('.gallery-dot').forEach((dot, i) => {
+                dot.classList.toggle('active', i === window.galleryIndex);
+            });
+
+            const lightboxImage = document.getElementById('lightbox-image');
+            if (lightboxImage) lightboxImage.src = url;
         }
+
+        function stepImage(delta) {
+            showImage((window.galleryIndex || 0) + delta);
+        }
+
+        // Kept because older markup called it.
+        function changeImage(url) {
+            const index = (window.galleryImages || []).indexOf(url);
+            showImage(index < 0 ? 0 : index);
+        }
+
+        function openLightbox() {
+            if (!(window.galleryImages || []).length) return;
+            const box = document.getElementById('lightbox');
+            const image = document.getElementById('lightbox-image');
+            if (!box || !image) return;
+
+            image.src = window.galleryImages[window.galleryIndex || 0];
+            image.classList.remove('zoomed');
+            box.classList.add('open');
+            // The page behind must not scroll while the overlay is up.
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeLightbox() {
+            const box = document.getElementById('lightbox');
+            if (box) box.classList.remove('open');
+            document.body.style.overflow = '';
+        }
+
+        function toggleZoom(event) {
+            event.stopPropagation();
+            const image = document.getElementById('lightbox-image');
+            if (image) image.classList.toggle('zoomed');
+        }
+
+        // Arrow keys and Escape, because a full-screen viewer that only responds
+        // to the mouse is annoying on a laptop.
+        document.addEventListener('keydown', (event) => {
+            const open = document.getElementById('lightbox')?.classList.contains('open');
+            if (event.key === 'Escape' && open) return closeLightbox();
+            if (!(window.galleryImages || []).length) return;
+            if (event.key === 'ArrowLeft') stepImage(-1);
+            if (event.key === 'ArrowRight') stepImage(1);
+        });
 
         // Contact owner — open in-app messaging on listings page
         let currentListingDetail = null;
@@ -434,5 +711,18 @@
             }
         })();
     </script>
+    <script src="/js/site-bootstrap.js" defer></script>
+    <script src="/js/site-nav.js?v=20260809e"></script>
+    <script src="/js/site-messages.js?v=20260822" defer></script>
+    <script src="/js/site-legal-footer.js?v=20260822" defer></script>
+    <!-- Full-screen photo viewer. Outside the listing container so it covers
+         the whole page regardless of where the gallery sits. -->
+    <div id="lightbox" class="lightbox" onclick="closeLightbox()">
+        <button class="lightbox-close" onclick="event.stopPropagation(); closeLightbox()" aria-label="Close">&times;</button>
+        <button class="lightbox-arrow lightbox-arrow-left" onclick="event.stopPropagation(); stepImage(-1)" aria-label="Previous photo">&#10094;</button>
+        <img id="lightbox-image" alt="Listing photo" onclick="toggleZoom(event)">
+        <button class="lightbox-arrow lightbox-arrow-right" onclick="event.stopPropagation(); stepImage(1)" aria-label="Next photo">&#10095;</button>
+    </div>
+    <script src="js/app-install-banner.js" defer></script>
 </body>
 </html>

@@ -1,19 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta name="apple-itunes-app" content="app-id=6802455334">
+    <meta name="robots" content="noindex, follow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <title>RoomFinderAI - Profile</title>
 
     <!-- Google AdSense -->
-    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-5195773691165769"
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3388740864153708"
          crossorigin="anonymous"></script>
 
     <!-- 🛡️ UNIVERSAL AUTHENTICATION PROTECTION SYSTEM -->
     <script src="universal-auth-protection.js"></script>
     
     <!-- 🔄 UNIVERSAL AUTHENTICATION MANAGER -->
+    <script src="/js/profiles-client.js?v=20260817"></script>
     <script src="universal-auth-manager.js"></script>
     
     <script src="https://cdn.tailwindcss.com"></script>
@@ -23,7 +29,49 @@
 
     <!-- Unified CSS System - No Inline Styles -->
     <link rel="stylesheet" href="/modules/css/main.css"/>
-    <script src="/js/site-nav.js" defer></script>
+    <style>
+        /* Logout is destructive enough to be worth pausing over, and it sat
+           next to Verify Account looking like the same kind of thing. It had
+           no rule at all, so it was rendering as a bare browser button. */
+        .logout-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.25rem;
+            padding: 0.75rem 1.75rem;
+            border-radius: var(--border-radius-sm, 0.75rem);
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            color: #b91c1c;
+            background: rgba(220, 38, 38, 0.08);
+            border: 2px solid rgba(220, 38, 38, 0.45);
+            transition: var(--transition, all 0.2s ease);
+        }
+        .logout-btn:hover {
+            background: #dc2626;
+            border-color: #dc2626;
+            color: #fff;
+        }
+
+        /* Section headings read as a wall of identical bold text otherwise.
+           Line icons rather than emoji: emoji render differently on every
+           platform and look like they were pasted in. */
+        .section-heading {
+            display: flex;
+            align-items: center;
+            gap: 0.65rem;
+        }
+        .section-heading svg {
+            width: 1.5rem;
+            height: 1.5rem;
+            flex: none;
+            color: var(--color-primary, #667eea);
+        }
+        .section-heading--danger svg { color: #dc2626; }
+    </style>
+    <script src="/js/site-nav.js?v=20260809e" defer></script>
+    <script src="/js/site-messages.js?v=20260822" defer></script>
+    <script src="/js/site-legal-footer.js?v=20260822" defer></script>
     <script src="/js/site-bootstrap.js" defer></script>
 </head>
 <body class="site-has-header">
@@ -92,33 +140,16 @@
 
         </div>
 
-        <!-- Roommate Profile (shared with RoomPal - roommate-matching.html) -->
-        <section id="roommateProfileSection" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12 hidden">
-            <h2 class="text-2xl font-bold text-gray-800 mb-6">Roommate Profile</h2>
-            <div id="roommateProfileCard"></div>
-        </section>
-
-        <!-- Billing & Subscription -->
-        <section id="billingSection" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
-            <div class="flex items-center justify-between mb-6">
-                <h2 class="text-2xl font-bold text-gray-800">Billing & Plan</h2>
-                <button id="manageBillingBtn" onclick="openBillingPortal()" class="btn-secondary text-sm hidden">Manage Billing</button>
-            </div>
-            <div id="billingContent" class="space-y-4">
-                <div class="text-gray-500 text-center py-6">Loading billing information...</div>
-            </div>
-        </section>
-
-        <!-- AI Chat History -->
-        <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
-            <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">AI Chat History</h2>
-            <div id="chatHistory" class="space-y-4"></div>
+        <!-- User Listings -->
+        <section id="my-listings" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
+            <h2 class="section-heading text-2xl font-bold text-gray-800 mb-6"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 12l9-9 9 9M5 10v10h5v-6h4v6h5V10"/></svg>Your Listings</h2>
+            <div id="userListings" class="space-y-4"></div>
         </section>
 
         <!-- Saved Listings -->
         <section id="saved-listings" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
             <div class="flex items-center justify-between mb-6">
-                <h2 class="text-2xl font-bold text-gray-800">Saved Listings</h2>
+                <h2 class="section-heading text-2xl font-bold text-gray-800"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M20.8 8.6a4.6 4.6 0 0 0-7.8-2.4L12 7.2l-1-1A4.6 4.6 0 0 0 3.2 8.6c0 4 4.9 7.2 8.8 10.7 3.9-3.5 8.8-6.7 8.8-10.7Z"/></svg>Saved Listings</h2>
                 <span id="savedListingsCount" class="text-sm text-gray-600">0 saved</span>
             </div>
             <div id="savedListingsContainer" class="space-y-4">
@@ -133,12 +164,74 @@
             </div>
         </section>
 
-        <!-- User Listings -->
-        <section id="my-listings" class="bg-white rounded-xl shadow-xl p-6 sm:p-8">
-            <h2 class="text-2xl font-bold text-gray-800 mb-6 text-center">Your Listings</h2>
-            <div id="userListings" class="space-y-4"></div>
+        <!-- Roommate Profile (shared with RoomPal - roommate-matching.html) -->
+        <section id="roommateProfileSection" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12 hidden">
+            <h2 class="section-heading text-2xl font-bold text-gray-800 mb-6"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M17 20v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9.5 7.5a3.5 3.5 0 1 1-7 0 3.5 3.5 0 0 1 7 0ZM22 20v-1a4 4 0 0 0-3-3.9M16 3.6a3.5 3.5 0 0 1 0 6.8"/></svg>Roommate Profile</h2>
+            <div id="roommateProfileCard"></div>
+        </section>
+
+        <!-- AI Chat History -->
+        <section class="bg-white rounded-xl shadow-xl p-6 sm:p-8">
+            <h2 class="section-heading text-2xl font-bold text-gray-800 mb-6"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12Z"/></svg>AI Chat History</h2>
+            <div id="chatHistory" class="space-y-4"></div>
+        </section>
+
+        <!-- Billing & Subscription -->
+        <section id="billingSection" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mb-12">
+            <div class="flex items-center justify-between mb-6">
+                <h2 class="section-heading text-2xl font-bold text-gray-800"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M3 10h18M6 15h4M3 7.5A2.5 2.5 0 0 1 5.5 5h13A2.5 2.5 0 0 1 21 7.5v9a2.5 2.5 0 0 1-2.5 2.5h-13A2.5 2.5 0 0 1 3 16.5v-9Z"/></svg>Billing &amp; Plan</h2>
+                <button id="manageBillingBtn" onclick="openBillingPortal()" class="btn-secondary text-sm hidden">Manage Billing</button>
+            </div>
+            <div id="billingContent" class="space-y-4">
+                <div class="text-gray-500 text-center py-6">Loading billing information...</div>
+            </div>
+        </section>
+
+        <!-- Account deletion.
+             Required by App Store Review Guideline 5.1.1(v): an app that lets
+             you create an account must let you delete it from inside the app.
+             Pointing people at support does not satisfy it. -->
+        <section id="danger-zone" class="bg-white rounded-xl shadow-xl p-6 sm:p-8 mt-8 border border-red-200">
+            <h2 class="section-heading section-heading--danger text-2xl font-bold text-gray-800 mb-2"><svg fill="none" stroke="currentColor" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M4 7h16M10 11v6M14 11v6M6 7l1 12.5A1.5 1.5 0 0 0 8.5 21h7a1.5 1.5 0 0 0 1.5-1.5L18 7M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>Delete Account</h2>
+            <p class="text-gray-600 mb-6">
+                Permanently deletes your account, your listings, your saved rooms, your
+                roommate profile and your message history. This cannot be undone.
+            </p>
+            <button type="button" onclick="openDeleteAccountModal()"
+                    class="px-6 py-3 rounded-xl font-semibold text-red-700 border border-red-300 hover:bg-red-50 transition">
+                Delete my account
+            </button>
         </section>
     </main>
+
+    <div id="deleteAccountModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 items-center justify-center">
+        <div class="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-6">
+            <h3 class="text-xl font-bold text-gray-900 mb-3">Delete your account?</h3>
+            <p class="text-gray-600 text-sm mb-4">
+                This removes everything tied to <strong id="deleteAccountEmail"></strong> and
+                cannot be reversed. Enter your password to confirm.
+            </p>
+
+            <label for="deleteAccountPassword" class="block text-sm font-medium text-gray-700 mb-1">Password</label>
+            <input id="deleteAccountPassword" type="password" autocomplete="current-password"
+                   class="form-input w-full mb-2 border border-gray-300 rounded-lg px-3 py-2"
+                   placeholder="Your password">
+            <p class="text-xs text-gray-500 mb-4">
+                Signed in with Google or Apple? Leave this blank and we'll use your current session.
+            </p>
+
+            <div id="deleteAccountError" class="hidden text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg p-3 mb-4"></div>
+
+            <div class="flex gap-3 justify-end">
+                <button type="button" onclick="closeDeleteAccountModal()"
+                        class="px-4 py-2 rounded-lg font-medium text-gray-700 hover:bg-gray-100">Cancel</button>
+                <button type="button" id="confirmDeleteAccountBtn" onclick="confirmDeleteAccount()"
+                        class="px-4 py-2 rounded-lg font-semibold text-white bg-red-600 hover:bg-red-700">
+                    Delete permanently
+                </button>
+            </div>
+        </div>
+    </div>
 
     <!-- Verification Modal - Multi-step: Selfie → ID -->
     <div id="verificationModal" class="fixed inset-0 bg-black bg-opacity-50 hidden z-50 flex items-center justify-center">
@@ -849,25 +942,32 @@
                 const container = document.getElementById('chatHistory');
 
                 // Fetch conversations from Supabase where user is sender or receiver
+                // Listings are looked up separately. Embedding them needed the
+                // foreign key on conversations.listing_id, which was removed so
+                // a conversation can also point at a sublease request. With the
+                // embed, PostgREST returns PGRST200 and this whole panel showed
+                // "Error loading chat history".
                 const { data: conversations, error } = await supabaseClient
                     .from('conversations')
-                    .select(`
-                        id,
-                        listing_id,
-                        sender_email,
-                        receiver_email,
-                        created_at,
-                        listings (
-                            id,
-                            title,
-                            price,
-                            street,
-                            city
-                        )
-                    `)
+                    .select('id, listing_id, sender_email, receiver_email, created_at, context')
                     .or(`sender_email.eq.${user.email},receiver_email.eq.${user.email}`)
                     .order('created_at', { ascending: false })
                     .limit(10);
+
+                if (conversations && conversations.length) {
+                    const ids = [...new Set(conversations.map(c => c.listing_id).filter(Boolean))];
+                    const byId = {};
+                    if (ids.length) {
+                        const { data: rows } = await supabaseClient
+                            .from('listings')
+                            .select('id, title, price, street, city')
+                            .in('id', ids);
+                        for (const l of rows || []) byId[l.id] = l;
+                    }
+                    // Sublease threads have no listings row — left null and
+                    // handled by the 'Listing' fallback below.
+                    conversations.forEach(c => { c.listings = byId[c.listing_id] || null; });
+                }
 
                 if (error) {
                     console.error('Error fetching conversations:', error);
@@ -947,14 +1047,26 @@
                 } else {
                     console.warn('API failed, trying direct Supabase query...');
                     // Fallback: direct Supabase query
+                    // favorites has no foreign key to listings either (this embed
+                    // was already failing with PGRST200 before today), so the
+                    // listing rows are fetched separately and joined here.
                     const { data, error } = await supabase
                         .from('favorites')
-                        .select('*, listings(*)')
+                        .select('*')
                         .eq('user_email', user.email);
 
                     if (!error && data) {
+                        const favListingIds = [...new Set(data.map(f => f.listing_id).filter(Boolean))];
+                        const favById = {};
+                        if (favListingIds.length) {
+                            const { data: favRows } = await supabase
+                                .from('listings')
+                                .select('*')
+                                .in('id', favListingIds);
+                            for (const l of favRows || []) favById[l.id] = l;
+                        }
                         savedListings = data.map(fav => ({
-                            ...fav.listings,
+                            ...(favById[fav.listing_id] || {}),
                             favorite_id: fav.id,
                             saved_at: fav.created_at
                         })).filter(l => l.id);
@@ -1145,39 +1257,111 @@
             document.getElementById('step2Section').classList.add('hidden');
             document.getElementById('loadingSection').classList.remove('hidden');
 
+
+        /**
+         * Shrinks a photo before it is uploaded.
+         *
+         * Two reasons. The vision model that checks these rejects anything much
+         * over a couple of megapixels as malformed, so an unresized phone photo
+         * skipped every check. And a 4MB upload over mobile data is a long wait
+         * for a page that looks frozen while it happens.
+         *
+         * PDFs are passed through untouched: a canvas cannot open one, and the
+         * server reads those a different way.
+         */
+        async function shrinkForUpload(file, maxSide = 1600) {
+            if (!file || file.type === 'application/pdf') return file;
+
             try {
-                // Upload selfie first
-                document.getElementById('progressText').textContent = 'Uploading selfie...';
+                const bitmap = await createImageBitmap(file);
+                const scale = Math.min(1, maxSide / Math.max(bitmap.width, bitmap.height));
+                if (scale === 1 && file.size < 1.5 * 1024 * 1024) return file;
+
+                const canvas = document.createElement('canvas');
+                canvas.width = Math.round(bitmap.width * scale);
+                canvas.height = Math.round(bitmap.height * scale);
+                canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+
+                const blob = await new Promise(resolve =>
+                    canvas.toBlob(resolve, 'image/jpeg', 0.85));
+                if (!blob) return file;
+
+                return new File([blob], (file.name || 'upload').replace(/\.[^.]+$/, '') + '.jpg',
+                                { type: 'image/jpeg' });
+            } catch (e) {
+                // Better to upload the original than to block verification.
+                console.warn('Could not shrink upload, sending as-is:', e);
+                return file;
+            }
+        }
+
+        /**
+         * Says why an upload was turned away, instead of the flow declaring
+         * success regardless. It used to ignore the response entirely, so a
+         * rejected photo still ended on "Complete!" and the person waited for a
+         * review that was never going to happen.
+         */
+        function showVerificationProblem(message) {
+            document.getElementById('loadingSection').classList.add('hidden');
+            document.getElementById('step2Section').classList.remove('hidden');
+            document.getElementById('progressBar').style.width = '0%';
+
+            let banner = document.getElementById('verificationProblem');
+            if (!banner) {
+                banner = document.createElement('div');
+                banner.id = 'verificationProblem';
+                banner.className = 'mb-4 p-4 rounded-xl border border-red-300 bg-red-50 text-red-700 text-sm';
+                document.getElementById('step2Section').prepend(banner);
+            }
+            banner.textContent = message;
+            banner.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+
+            try {
+                // The document goes first, whatever order they were captured in.
+                //
+                // The selfie endpoint refuses to accept anything until a
+                // verification row exists, and only the document creates one —
+                // so uploading the selfie first answered every single attempt
+                // with "Please submit your ID document first before uploading a
+                // selfie", which is impossible to act on when the page has just
+                // asked for the selfie. Nobody could finish verifying.
+                document.getElementById('progressText').textContent = 'Uploading ID document...';
                 document.getElementById('progressBar').style.width = '25%';
 
-                const selfieFormData = new FormData();
-                selfieFormData.append('facePhoto', verificationData.selfie);
-                selfieFormData.append('userEmail', currentUser.email);
-
-                const selfieResponse = await fetch('/api/verify/face-match', {
-                    method: 'POST',
-                    body: selfieFormData
-                });
-
-                document.getElementById('progressBar').style.width = '50%';
-                document.getElementById('progressText').textContent = 'Uploading ID document...';
-
-                // Upload ID document
                 const idFormData = new FormData();
-                idFormData.append('idDocument', verificationData.idDocument);
+                idFormData.append('idDocument', await shrinkForUpload(verificationData.idDocument));
                 idFormData.append('userEmail', currentUser.email);
 
                 const idResponse = await fetch('/api/verify/upload-id', {
                     method: 'POST',
                     body: idFormData
                 });
+                const idResult = await idResponse.json();
+                if (!idResponse.ok) {
+                    showVerificationProblem(idResult.error || 'That document could not be accepted.');
+                    return;
+                }
+
+                document.getElementById('progressBar').style.width = '50%';
+                document.getElementById('progressText').textContent = 'Uploading selfie...';
+
+                const selfieFormData = new FormData();
+                selfieFormData.append('facePhoto', await shrinkForUpload(verificationData.selfie));
+                selfieFormData.append('userEmail', currentUser.email);
+
+                const selfieResponse = await fetch('/api/verify/face-match', {
+                    method: 'POST',
+                    body: selfieFormData
+                });
+                const selfieResult = await selfieResponse.json();
+                if (!selfieResponse.ok) {
+                    showVerificationProblem(selfieResult.error || 'That selfie could not be accepted.');
+                    return;
+                }
 
                 document.getElementById('progressBar').style.width = '100%';
                 document.getElementById('progressText').textContent = 'Complete!';
-
-                // Check responses
-                const selfieResult = await selfieResponse.json();
-                const idResult = await idResponse.json();
 
                 console.log('Selfie upload result:', selfieResult);
                 console.log('ID upload result:', idResult);
@@ -1188,7 +1372,7 @@
                     document.getElementById('successSection').classList.remove('hidden');
 
                     // Update local user status to pending
-                    currentUser.verificationStatus = 'pending_review';
+                    currentUser.verificationStatus = 'pending';
                     safeLocalStorageSetItem('currentUser', JSON.stringify(currentUser));
                 }, 500);
 
@@ -1474,11 +1658,30 @@
         async function deleteListing(id) {
             const currentUser = JSON.parse(localStorage.getItem('currentUser')) || {};
 
+            // Deleting used to happen on the tap, with no confirmation at all.
+            // A listing is not recoverable once it is gone, and the button sits
+            // beside Edit on a card people scroll past — one mis-tap on a phone
+            // destroyed a room and everything written about it.
+            //
+            // Typing the word is deliberate: a yes/no box is dismissed by
+            // reflex, and this is the one action here that cannot be undone.
+            const card = document.querySelector(`[onclick*="deleteListing('${id}')"]`)?.closest('.rounded-lg');
+            const name = card?.querySelector('h3, h4')?.textContent?.trim() || 'this listing';
+
+            const typed = prompt(
+                `Delete "${name}"?\n\n` +
+                'This permanently removes the listing and its photos. It cannot be undone.\n\n' +
+                'Type DELETE to confirm.'
+            );
+
+            if (typed === null) return;                       // cancelled
+            if (typed.trim().toUpperCase() !== 'DELETE') {
+                alert('Not deleted. You need to type DELETE exactly.');
+                return;
+            }
+
             console.log('DELETE REQUEST:', { listingId: id, userEmail: currentUser.email });
 
-            // Find the listing card element (button's grandparent is the card)
-            const deleteButton = document.querySelector(`[onclick*="deleteListing('${id}')"]`);
-            const card = deleteButton ? deleteButton.closest('.rounded-lg') : null;
 
             try {
                 // Show loading state with animation on the card
@@ -1634,6 +1837,92 @@
             } catch (error) {
                 console.error('Error removing favorite:', error);
                 alert('Failed to remove from favorites. Please try again.');
+            }
+        }
+
+        // ---- Account deletion (App Store guideline 5.1.1(v)) ----
+
+        function openDeleteAccountModal() {
+            const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+            if (!user?.email) {
+                alert('Please sign in first.');
+                return;
+            }
+            document.getElementById('deleteAccountEmail').textContent = user.email;
+            document.getElementById('deleteAccountPassword').value = '';
+            const error = document.getElementById('deleteAccountError');
+            error.classList.add('hidden');
+            error.textContent = '';
+
+            const modal = document.getElementById('deleteAccountModal');
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+        }
+
+        function closeDeleteAccountModal() {
+            const modal = document.getElementById('deleteAccountModal');
+            modal.classList.add('hidden');
+            modal.classList.remove('flex');
+        }
+
+        async function confirmDeleteAccount() {
+            const user = JSON.parse(localStorage.getItem('currentUser') || 'null');
+            if (!user?.email) return;
+
+            const button = document.getElementById('confirmDeleteAccountBtn');
+            const errorBox = document.getElementById('deleteAccountError');
+            const password = document.getElementById('deleteAccountPassword').value;
+
+            const showError = (message) => {
+                errorBox.textContent = message;
+                errorBox.classList.remove('hidden');
+                button.disabled = false;
+                button.textContent = 'Delete permanently';
+            };
+
+            button.disabled = true;
+            button.textContent = 'Deleting…';
+            errorBox.classList.add('hidden');
+
+            // Accounts created through Google or Apple have no password, so the
+            // live Supabase session token stands in as proof of identity.
+            let accessToken = null;
+            try {
+                const client = await (window.supabaseConfigReady || Promise.resolve(window.supabaseClient));
+                const { data } = await client.auth.getSession();
+                accessToken = data?.session?.access_token || null;
+            } catch (e) { /* password path only */ }
+
+            if (!password && !accessToken) {
+                showError('Enter your password to confirm.');
+                return;
+            }
+
+            try {
+                const response = await fetch('/api/account/delete', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ email: user.email, password, accessToken })
+                });
+                const result = await response.json();
+
+                if (!response.ok) {
+                    showError(result.error || 'Could not delete your account.');
+                    return;
+                }
+
+                // The account is gone; clear every local trace before leaving,
+                // or the auth-protection script restores a phantom session.
+                sessionStorage.setItem('legitimateLogout', 'true');
+                ['currentUser', 'authToken', 'users', 'currentUser_backup',
+                 'currentUser_backup_2', 'currentUser_emergency'].forEach((key) => {
+                    try { localStorage.removeItem(key); } catch (e) { /* ignore */ }
+                });
+
+                alert('Your account and all associated data have been deleted.');
+                window.location.href = 'index.html';
+            } catch (e) {
+                showError('Network error. Please try again.');
             }
         }
 

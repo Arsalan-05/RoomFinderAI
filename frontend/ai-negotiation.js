@@ -236,9 +236,38 @@ class AINegotiator {
     // catches model violations (trailing questions in CLOSING, emojis when
     // landlord is hostile, agreeing to a day outside the tenant's availability)
     // and either trims or hard-replaces with a sane fallback.
-    validateAndRepair(rawResponse, { phase, tone, facts, tenantGoals, messageHistory }) {
+    validateAndRepair(rawResponse, { phase, tone, facts, tenantGoals, messageHistory, listing, userBudget }) {
         if (!rawResponse) return rawResponse;
         let out = String(rawResponse).trim();
+
+        // HARD PRICE CEILING — outranks every other rule below.
+        //
+        // Real failure this fixes: on a $3,675 listing the landlord said
+        // "we can do tommroow for 5000" and the AI answered "Yes, that works.
+        // See you then." — committing the tenant to 36% ABOVE asking. Nothing
+        // in the pipeline compared the landlord's number to the listing price,
+        // so any figure, however absurd, sailed through.
+        //
+        // Ceiling is the lower of asking price and the tenant's budget: we are
+        // negotiating DOWN, so agreeing at or above asking is never a valid
+        // outcome. Acceptance language is replaced with a counter anchored on
+        // the real numbers.
+        const askingPrice = Number(listing?.price) || null;
+        const budget = Number(userBudget) || null;
+        const ceiling = Math.min(askingPrice || Infinity, budget || Infinity);
+        const landlordPrice = Number(facts?.landlord_last_named_price) || null;
+
+        if (landlordPrice && Number.isFinite(ceiling) && landlordPrice > ceiling) {
+            const acceptsPrice = /\b(yes|yeah|yep|sure|ok(ay)?|deal|agreed|sold|that works|works for me|sounds good|i.?ll take it|we.?ll take it|see you|let.?s do it|perfect|great)\b/i.test(out);
+            const restatesHigher = new RegExp(`\\$?\\s*${landlordPrice}\\b`).test(out.replace(/,/g, ''));
+            if (acceptsPrice || restatesHigher) {
+                const target = Math.round(ceiling);
+                console.warn(`🛡️ Validator: BLOCKED acceptance of $${landlordPrice} — above ceiling $${target} (asking ${askingPrice}, budget ${budget}). Countering instead.`);
+                return askingPrice && landlordPrice > askingPrice
+                    ? `Hold on — the listing is posted at $${askingPrice}, so $${landlordPrice} is above asking. I'm working with $${target}. Can we do $${target}?`
+                    : `That's over my budget, unfortunately. I can do $${target} — does that work on your end?`;
+            }
+        }
 
         // Phase-agnostic check: never agree to a meeting day until price has
         // been raised at least once. Skipping price negotiation is the single
@@ -289,6 +318,22 @@ class AINegotiator {
         if (phase === 'CLOSING') {
             const hasQuestion = /\?/.test(out);
             if (hasQuestion) {
+                // The old fallback was an unconditional "Yes, that works. See
+                // you then." — it fired on ANY closing-phase question, so the
+                // AI accepted whatever the landlord's last message contained.
+                // In one real transcript it "agreed" twice in a row, the second
+                // time in reply to the landlord writing "fuck off". Only emit
+                // an acceptance when there is an actual agreed price at or
+                // under the ceiling; otherwise keep negotiating.
+                const agreed = Number(facts?.agreed_price) || null;
+                const priceSettled = agreed && (!Number.isFinite(ceiling) || agreed <= ceiling);
+                if (!priceSettled) {
+                    console.warn('🛡️ Validator: CLOSING question with no settled price — holding on price instead of accepting.');
+                    const target = Number.isFinite(ceiling) ? Math.round(ceiling) : null;
+                    return target
+                        ? `Before we lock anything in — can we agree on $${target}?`
+                        : `Before we lock anything in — can we settle the rent first?`;
+                }
                 console.warn('🛡️ Validator: AI emitted question(s) in CLOSING. Replacing with fallback.');
                 return facts?.proposed_meet_date
                     ? `Yes, that works. See you ${facts.proposed_meet_date}.`
@@ -814,6 +859,51 @@ Write 2-3 sentences negotiating naturally.`
     }
 
     // Handle landlord reply and generate next phase response
+    // Generate a landlord reply through /api/negotiate/reply — the same single
+    // call ai-chat.js uses. The model decides the wording from the whole
+    // thread; the backend enforces the price ceiling from the tenant's own
+    // goal-panel parameters and refuses to reopen settled terms.
+    async generateReplyViaApi(landlordMessage, conversationId, listing, tenantEmail) {
+        const goals = (typeof window !== 'undefined' && typeof window.getTenantGoals === 'function')
+            ? window.getTenantGoals()
+            : {};
+
+        let messageHistory = [];
+        try {
+            const { data } = await this.supabase
+                .from('messages')
+                .select('sender_email, content, created_at')
+                .eq('conversation_id', conversationId)
+                .order('created_at', { ascending: true })
+                .limit(30);
+            messageHistory = (data || []).map(m => ({
+                sender: (m.sender_email === tenantEmail || m.sender_email === 'ai-negotiator@roomfinder.com')
+                    ? 'ai' : 'landlord',
+                // Strip the disclosure footer so it isn't fed back as conversation.
+                content: String(m.content || '').split('\n\n———\n\n')[0]
+            }));
+        } catch (e) {
+            console.warn('generateReplyViaApi: could not load thread:', e?.message || e);
+        }
+
+        const res = await fetch('/api/negotiate/reply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                listing: { price: listing?.price, title: listing?.title, city: listing?.city },
+                tenantParams: goals,
+                messageHistory,
+                lastLandlordMessage: landlordMessage || '',
+                userEmail: tenantEmail
+            })
+        });
+        if (!res.ok) throw new Error(`Negotiator API returned ${res.status}`);
+        const data = await res.json();
+        if (data.guard?.overridden) console.warn('🛡️ Price ceiling enforced:', data.guard.reason);
+        console.log(`💬 Reply (${data.tactic || 'no tactic'}):`, data.message);
+        return { message: data.message, delay: 1500 + Math.floor(Math.random() * 2500) };
+    }
+
     async handleLandlordReplyWithPhases(landlordMessage, negotiationId, listing) {
         try {
             console.log('💬 Processing landlord reply for phased conversation');
@@ -965,7 +1055,9 @@ Write 2-3 sentences negotiating naturally.`
                 tone: conversationState.tone,
                 facts: conversationState.facts,
                 tenantGoals: tenantGoalsForValidator,
-                messageHistory: conversationState.messageHistory
+                messageHistory: conversationState.messageHistory,
+                listing: conversationState.listing,
+                userBudget: conversationState.userBudget
             });
 
             // Once we've actually shipped a phase response (especially in
@@ -983,11 +1075,26 @@ Write 2-3 sentences negotiating naturally.`
             // validateAndRepair, we lock CLOSING *before* the next inbound
             // message arrives — its handler then renders a calm confirmation
             // instead of restarting discovery.
-            if (this.CLOSING_SIGNALS_RE.test(responseMessage) && conversationState.currentPhase !== 'CLOSING') {
+            // Guard the self-lock: CLOSING_SIGNALS_RE is tuned for landlord
+            // messages, where "that works" means agreement. In our OWN output
+            // the same words appear inside ordinary questions — a real
+            // transcript locked CLOSING off "the move-in timeframe that works
+            // for you", which skipped PRICE_INTRODUCTION and
+            // ACTIVE_NEGOTIATION entirely, so rent was never negotiated at
+            // all. Only self-lock on an unambiguous commitment: no trailing
+            // question, and either a settled price or explicit deal language.
+            const selfSignalsClosing = this.CLOSING_SIGNALS_RE.test(responseMessage);
+            const asksSomething = /\?/.test(responseMessage);
+            const explicitCommit = /\b(deal|i.?ll take it|we.?ll take it|sold|agreed|see you|let.?s do it)\b/i.test(responseMessage);
+            const priceOnTable = !!(conversationState.facts.agreed_price || conversationState.facts.landlord_last_named_price);
+            if (selfSignalsClosing && !asksSomething && (explicitCommit || priceOnTable)
+                && conversationState.currentPhase !== 'CLOSING') {
                 console.log('🔒 AI itself signaled acceptance — locking phase to CLOSING.');
                 conversationState.currentPhase = 'CLOSING';
                 conversationState.phaseHistory.push('CLOSING');
                 conversationState.facts.landlord_said_yes_to_meet = true;
+            } else if (selfSignalsClosing && conversationState.currentPhase !== 'CLOSING') {
+                console.log('↩️ Ignoring soft closing phrase in our own question — staying in', conversationState.currentPhase);
             }
 
             // Record our response
@@ -2957,7 +3064,9 @@ Generate ONLY the message. No greetings, no signatures.
                         response,
                         negotiation.userEmail,
                         negotiation.landlordEmail,
-                        negotiation.listingTitle
+                        negotiation.listingTitle,
+                        null,
+                        false // reply — disclosure already made at first contact
                     );
                     
                     if (sentSuccessfully) {
@@ -3084,7 +3193,9 @@ Generate ONLY the message. No greetings, no signatures.
                         marketResponse,
                         negotiation.userEmail,
                         negotiation.landlordEmail,
-                        negotiation.listingTitle
+                        negotiation.listingTitle,
+                        null,
+                        false // reply — disclosure already made at first contact
                     );
                     
                     negotiation.messages.push({
@@ -3830,7 +3941,10 @@ Generate ONLY the message. No greetings, no signatures.
         return `${hex.substring(0,8)}-${hex.substring(8,12)}-${hex.substring(12,16)}-${hex.substring(16,20)}-${hex.substring(20,32)}`;
     }
 
-    async sendNegotiationMessage(conversationId, message, userEmail, landlordEmail = null, listingTitle = null, respondsToMessageId = null) {
+    // No disclosure footer is appended to outgoing messages. The trailing
+    // includeDisclosure parameter is kept so existing call sites that still pass
+    // `false` remain valid; it is ignored.
+    async sendNegotiationMessage(conversationId, message, userEmail, landlordEmail = null, listingTitle = null, respondsToMessageId = null, includeDisclosure = false) {
         try {
             // Ensure AI user exists first
             await this.ensureAIUserExists();
@@ -3846,7 +3960,10 @@ Generate ONLY the message. No greetings, no signatures.
             // divider line ("———") on its own row, with blank lines above and
             // below, makes the footer read as a distinct signature block
             // rather than a trailing sentence on the message body.
-            const fullContent = `${message}\n\n———\n\nSent via RoomFinder AI on behalf of ${userEmail}`;
+            // Disclosure footer removed at the product owner's instruction — no
+            // "Sent via RoomFinder AI" line is appended to any message, including
+            // first contact. Messages go out as written.
+            const fullContent = message;
             const createdAt = new Date().toISOString();
             let finalSenderEmail = senderEmail;
             let finalContent = fullContent;
@@ -3884,18 +4001,34 @@ Generate ONLY the message. No greetings, no signatures.
             if (error) {
                 console.error('Error sending negotiation message with AI email:', error);
 
-                // Fallback: try using the user's email instead
+                // Fallback: try using the user's email instead, for when the AI
+                // sender address itself is rejected.
+                //
+                // The deterministic id has to come with it. Without it this
+                // insert was a fresh random row, so the dedup that the whole
+                // scheme rests on was skipped exactly when two paths were
+                // racing: both a $1750 and a $1800 reply reached one landlord,
+                // seconds apart, in a live negotiation. Carrying the id means
+                // the loser still collides and bails.
                 console.log('Retrying with user email...');
                 finalSenderEmail = userEmail;
-                finalContent = `${message}\n\n———\n\nSent via RoomFinder AI`;
+                finalContent = message;
+                const retryPayload = {
+                    conversation_id: conversationId,
+                    sender_email: finalSenderEmail,
+                    content: finalContent,
+                    created_at: createdAt
+                };
+                if (insertPayload.id) retryPayload.id = insertPayload.id;
+
                 const { error: retryError } = await this.supabase
                     .from('messages')
-                    .insert({
-                        conversation_id: conversationId,
-                        sender_email: finalSenderEmail,
-                        content: finalContent,
-                        created_at: createdAt
-                    });
+                    .insert(retryPayload);
+
+                if (retryError?.code === '23505') {
+                    console.log('📨 Lost dedup race on retry — another session already responded. Skipping.');
+                    return false;
+                }
 
                 if (retryError) {
                     console.error('Error sending negotiation message with user email:', retryError);
@@ -3904,6 +4037,18 @@ Generate ONLY the message. No greetings, no signatures.
             }
 
             console.log('✅ Sent negotiation message');
+
+            // Buzz the landlord's phone. This write went straight to Supabase,
+            // so it never passed through POST /api/messages and nothing
+            // server-side knows it happened — which is why a landlord could be
+            // negotiated with all afternoon and find out on their next visit.
+            // Fire-and-forget, and it carries no notification text: the server
+            // reads the thread and decides what to say.
+            fetch('/api/push/notify-message', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ conversationId, senderEmail: finalSenderEmail })
+            }).catch(e => console.warn('Push notify failed (non-fatal):', e?.message || e));
 
             // Live broadcast on the same chat-{conversationId} channel the docked chat
             // subscribes to in listings.html. Without this the landlord's screen has to
@@ -3994,6 +4139,26 @@ Generate ONLY the message. No greetings, no signatures.
                     console.log('🔔 Message sender:', newMessage.sender_email);
                     console.log('🔔 Message content:', newMessage.content);
                     
+                    // Don't answer a conversation that already has an owner.
+                    //
+                    // ai-chat.js opens a per-conversation channel when a
+                    // negotiation starts, and this listener sees every INSERT
+                    // in the table, so both of them woke up on the same
+                    // landlord message and each made its own call to
+                    // /api/negotiate/reply. Two completions, two bills, two
+                    // different answers — in one live negotiation this one
+                    // offered $1800 while the other offered $1750 for the same
+                    // message. The insert-level dedup hid the second message
+                    // but only after both had already been paid for.
+                    //
+                    // This listener still covers everything ai-chat.js has not
+                    // claimed: threads from an earlier session, and the docked
+                    // chat on the listings page, which never registers one.
+                    if (window.aiChat?.autoReplyChannels?.has(newMessage.conversation_id)) {
+                        console.log('📨 Conversation already handled by the per-conversation listener — not generating a second reply');
+                        return;
+                    }
+
                     // Check if this is a reply to an AI negotiation
                     if (newMessage.sender_email !== 'ai-negotiator@roomfinder.com') {
                         console.log('📨 Processing reply from:', newMessage.sender_email);
@@ -4021,6 +4186,19 @@ Generate ONLY the message. No greetings, no signatures.
                         const tenantEmail = conversation?.sender_email?.toLowerCase();
                         if (!meEmail || !tenantEmail || meEmail !== tenantEmail) {
                             console.log('📨 Skipping AI response — this session is not the tenant for this negotiation', { me: meEmail, tenant: tenantEmail });
+                            return;
+                        }
+
+                        // Never answer ourselves. The only test above is "not
+                        // sent by the AI address", so the tenant's own messages
+                        // counted as a landlord reply. That matters because
+                        // sendNegotiationMessage falls back to posting under
+                        // the tenant's address when the AI sender is rejected:
+                        // the AI's own line came back through this listener as
+                        // if the landlord had written it, and the negotiator
+                        // replied to itself while the landlord said nothing.
+                        if (newMessage.sender_email?.toLowerCase() === tenantEmail) {
+                            console.log('📨 Skipping — that is the tenant\'s own message, not a landlord reply');
                             return;
                         }
 
@@ -4132,11 +4310,18 @@ Generate ONLY the message. No greetings, no signatures.
                                     }
                                 }
 
-                                // Use the NEW phased reply handler
-                                const response = await this.handleLandlordReplyWithPhases(
+                                // This global listener is the OTHER reply path — it fires
+                                // whenever a landlord message lands, independently of the
+                                // per-conversation listener in ai-chat.js. It was still
+                                // running the old phase engine, so conversations answered
+                                // here kept the bugs that were fixed elsewhere (asking the
+                                // landlord what OUR move-in timeframe is, re-opening
+                                // settled rent). Route it through the same single endpoint.
+                                const response = await this.generateReplyViaApi(
                                     newMessage.content,
-                                    negotiationId,
-                                    listing
+                                    conversation.id,
+                                    listing,
+                                    conversation.sender_email
                                 );
 
                                 if (response && response.message) {
@@ -4154,7 +4339,8 @@ Generate ONLY the message. No greetings, no signatures.
                                         conversation.sender_email,
                                         listing.user_email,
                                         listing.title,
-                                        newMessage.id
+                                        newMessage.id,
+                                        false // reply — disclosure already made at first contact
                                     );
                                     console.log(`✅ [PHASED v2] Sent ${response.phase} response`);
                                 } else {

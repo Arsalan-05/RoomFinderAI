@@ -75,15 +75,12 @@ async function getCurrentUser() {
             console.log('🔍 Supabase session:', session?.user?.email || 'no session');
             if (!session?.user) return null;
             
-            // Get profile data from profiles table
-            const { data: profile, error } = await window.supabase
-                .from('profiles')
-                .select('first_name, last_name, email, profile_image_url')
-                .eq('email', session.user.email)
-                .single();
-                
-            if (error) {
-                console.warn('Profile fetch error:', error);
+            // Through the server: the browser key is no longer allowed to
+            // read this table, because it could be used to list every user's
+            // address.
+            const profile = await window.RoomFinderProfiles?.getMyProfile(session.user.email);
+
+            if (!profile) {
                 return {
                     email: session.user.email,
                     firstName: 'User',
@@ -114,14 +111,8 @@ async function getStoredProfileImage(email) {
     try {
         if (!window.supabase || !email) return DEFAULT_PROFILE_IMAGE;
         
-        // Get profile image from Supabase
-        const { data: profile, error } = await window.supabase
-            .from('profiles')
-            .select('profile_image_url')
-            .eq('email', email)
-            .single();
-            
-        const storedImage = profile?.profile_image_url;
+        // Server-side lookup, one address at a time.
+        const storedImage = await window.RoomFinderProfiles?.getProfileImage(email);
         
         if (storedImage && storedImage !== 'null' && storedImage !== 'undefined') {
             return storedImage;
@@ -186,6 +177,22 @@ function isSecurityCheckPassed() {
  * Redirect after login — skip verification-modal if already verified
  */
 function redirectAfterLogin(redirectUrl) {
+    // Inside the iOS app, land on the profile page.
+    //
+    // Login is hosted by the Profile tab, and the default target is
+    // index.html — the website's homepage. The app has its own native home
+    // screen, so that dropped a second, web homepage inside the Profile tab
+    // and read as the app glitching after signing in.
+    //
+    // The Turnstile interstitial is skipped for the same surface: it is a
+    // bot check for anonymous web traffic, and someone who has just completed
+    // Google or Apple sign-in through the system's own Safari context has
+    // already proved more than it ever could.
+    if (window.RoomFinderNative) {
+        window.location.href = 'profile.html';
+        return;
+    }
+
     const target = redirectUrl || 'index.html';
     if (isSecurityCheckPassed()) {
         window.location.href = target;
@@ -363,28 +370,13 @@ async function initSupabaseAuth() {
 
     try {
         // Check if user exists in profiles table
-        let { data: profile, error } = await supabaseClient
-            .from('profiles')
-            .select('*')
-            .eq('email', currentUser.email)
-            .single();
-
-        if (error || !profile) {
-            const newProfile = {
-                email: currentUser.email,
-                profile_image_url: DEFAULT_PROFILE_IMAGE
-            };
-            const { data, error: insertError } = await supabaseClient
-                .from('profiles')
-                .upsert([newProfile], { onConflict: 'email' })
-                .select()
-                .single();
-
-            if (insertError) {
-                console.error('Error creating profile:', insertError);
-                return false;
-            }
-            profile = data;
+        // One call: the server returns the profile and creates it first if it
+        // does not exist, which is what the select-then-insert below used to do
+        // from the browser.
+        const profile = await window.RoomFinderProfiles?.getMyProfile(currentUser.email);
+        if (!profile) {
+            console.error('Could not load or create profile for', currentUser.email);
+            return false;
         }
 
         currentUser.id = profile.id;

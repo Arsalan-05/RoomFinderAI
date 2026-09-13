@@ -70,32 +70,45 @@
             '<span class="hamburger-line"></span><span class="hamburger-line"></span><span class="hamburger-line"></span>' +
             '</button></div>' +
             '<div class="desktop-nav site-show-desktop">' +
+            // Top level = the four things people come here to do. Anything that
+            // is a page you visit once (pricing, support, policy) lives under
+            // More. AI Negotiator and Listings are never nested — they were
+            // buried in dropdowns before and effectively undiscoverable.
+            // Student Housing is deliberately absent: the page is broken.
+            // Ordered by how much people actually use them: Sublease is the
+            // weakest of the four, so it sits last, just before the More menu.
             '<a href="index.html" class="nav-item">Home</a>' +
+            '<a href="listings.html" class="nav-item">Listings</a>' +
+            // Supply is the bottleneck, so the landlord entry point is top
+            // level rather than buried in More. Every outreach email points
+            // at the site root, and an operator who lands there needs a way
+            // in that is not the tenant-facing negotiator hero.
+            '<a href="for-landlords.html" class="nav-item">List a Room</a>' +
+            '<a href="ai-negotiator.html" class="nav-item">AI Negotiator</a>' +
             '<a href="roommate-matching.html" class="nav-item">RoomPal</a>' +
-            '<div class="dropdown">' +
-            '<button type="button" class="nav-item dropdown-trigger" onclick="toggleDropdown(\'browse\')">Browse <span class="dropdown-arrow">▼</span></button>' +
-            '<div class="dropdown-menu" id="browse-dropdown">' +
-            '<a href="listings.html" class="dropdown-item">Listings</a>' +
-            '<a href="student-housing.html" class="dropdown-item">Student Housing</a>' +
-            '<a href="sublease.html" class="dropdown-item">Subleasing</a>' +
-            '</div></div>' +
-            '<div class="dropdown">' +
-            '<button type="button" class="nav-item dropdown-trigger" onclick="toggleDropdown(\'tools\')">Tools <span class="dropdown-arrow">▼</span></button>' +
-            '<div class="dropdown-menu" id="tools-dropdown">' +
-            '<a href="ai-negotiator.html" class="dropdown-item">AI Negotiator</a>' +
-            '<a href="legal.html" class="dropdown-item">Legal Help</a>' +
-            '</div></div>' +
+            '<a href="sublease.html" class="nav-item">Sublease</a>' +
             '<div class="dropdown">' +
             '<button type="button" class="nav-item dropdown-trigger" onclick="toggleDropdown(\'about\')">More <span class="dropdown-arrow">▼</span></button>' +
             '<div class="dropdown-menu" id="about-dropdown">' +
-            '<a href="index.html#about" class="dropdown-item">About Us</a>' +
+            '<a href="legal.html" class="dropdown-item">Legal Help</a>' +
+            // Disputes were reachable only from a card halfway down the home
+            // page, so anyone already in a disagreement had to go back there to
+            // find it.
+            '<a href="file-dispute.html" class="dropdown-item">File a Dispute</a>' +
+            '<a href="my-disputes.html" class="dropdown-item">My Disputes</a>' +
             '<a href="pricing.html" class="dropdown-item">Pricing</a>' +
-            '<a href="index.html#contact" class="dropdown-item">Contact</a>' +
             '<a href="support.html" class="dropdown-item">Support</a>' +
             '</div></div>' +
-            <a href="profile.html" id="navProfileLink" class="nav-item site-nav-profile-link hidden" style="display:none !important" aria-hidden="true">Profile</a>
+            // This line was raw HTML dropped into a string concatenation without
+            // quotes, so site-nav.js threw a SyntaxError on load and never
+            // rendered anything — which is why all 27 pages ended up carrying
+            // their own hand-written nav, and why they drifted apart.
+            '<a href="profile.html" id="navProfileLink" class="nav-item site-nav-profile-link hidden" style="display:none !important" aria-hidden="true">Profile</a>' +
             '</div>' +
-            '<div class="desktop-auth site-show-desktop">' +
+            // Inline flex rather than relying on each page's CSS: on
+            // ai-negotiator.html .desktop-auth had no layout rules, so the bell
+            // stacked ABOVE the profile link instead of sitting beside it.
+            '<div class="desktop-auth site-show-desktop" style="display:flex;align-items:center;gap:10px;">' +
             '<div id="notificationBell" class="site-nav-notification relative cursor-pointer hidden p-2 hover:bg-gray-100 rounded-lg transition" onclick="typeof toggleNotificationPanel===\'function\'&&toggleNotificationPanel()" aria-label="Notifications">' +
             '<svg class="w-6 h-6 text-gray-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"></path></svg>' +
             '<span id="notificationBadge" class="hidden absolute -top-1 -right-1 bg-red-500 text-white text-xs rounded-full w-5 h-5 flex items-center justify-center">0</span>' +
@@ -123,7 +136,8 @@
             '<button type="button" class="mobile-section-header" onclick="toggleMobileSection(\'browse\')">Browse <span class="mobile-arrow" id="browse-arrow">▼</span></button>' +
             '<div class="mobile-section-content" id="browse-section">' +
             '<a href="listings.html" class="mobile-menu-item" onclick="closeMobileMenu()">Listings</a>' +
-            '<a href="student-housing.html" class="mobile-menu-item" onclick="closeMobileMenu()">Student Housing</a>' +
+            '<a href="for-landlords.html" class="mobile-menu-item" onclick="closeMobileMenu()">List a Room</a>' +
+            
             '<a href="sublease.html" class="mobile-menu-item" onclick="closeMobileMenu()">Subleasing</a>' +
             '</div></div>' +
             '<div class="mobile-section">' +
@@ -131,13 +145,13 @@
             '<div class="mobile-section-content" id="tools-section">' +
             '<a href="ai-negotiator.html" class="mobile-menu-item" onclick="closeMobileMenu()">AI Negotiator</a>' +
             '<a href="legal.html" class="mobile-menu-item" onclick="closeMobileMenu()">Legal Help</a>' +
+            '<a href="file-dispute.html" class="mobile-menu-item" onclick="closeMobileMenu()">File a Dispute</a>' +
+            '<a href="my-disputes.html" class="mobile-menu-item" onclick="closeMobileMenu()">My Disputes</a>' +
             '</div></div>' +
             '<div class="mobile-section">' +
             '<button type="button" class="mobile-section-header" onclick="toggleMobileSection(\'about\')">More <span class="mobile-arrow" id="about-arrow">▼</span></button>' +
             '<div class="mobile-section-content" id="about-section">' +
-            '<a href="index.html#about" class="mobile-menu-item" onclick="closeMobileMenu()">About Us</a>' +
             '<a href="pricing.html" class="mobile-menu-item" onclick="closeMobileMenu()">Pricing</a>' +
-            '<a href="index.html#contact" class="mobile-menu-item" onclick="closeMobileMenu()">Contact</a>' +
             '<a href="support.html" class="mobile-menu-item" onclick="closeMobileMenu()">Support</a>' +
             '</div></div>' +
             '<div id="mobileAuthSection">' +
@@ -155,11 +169,27 @@
         }
 
         var html = buildCanonicalNavHtml();
-        var existing = document.getElementById('header') || document.querySelector('header.premium-header, header.modern-header, .premium-header');
+        // ai-negotiator.html and a few others use <nav class="nav-header"> rather
+        // than a <header>; without matching it the canonical nav was prepended
+        // ALONGSIDE the old one, giving two stacked menus.
+        var existing = document.getElementById('header') || document.querySelector('header.premium-header, header.modern-header, .premium-header, nav.nav-header, .nav-header');
         if (existing && existing.tagName) {
             existing.outerHTML = html;
         } else {
             document.body.insertAdjacentHTML('afterbegin', html);
+        }
+
+        // Force the auth cluster into a row from JS, not CSS.
+        // Verified in the browser: the element carried inline `display:flex`
+        // AND an `!important` rule, yet still computed to `block` — a
+        // cross-origin stylesheet was winning the cascade. An inline property
+        // set with priority "important" is the only thing that reliably beats
+        // it, so the bell stops stacking on top of the profile link.
+        var authRow = document.querySelector('.desktop-auth');
+        if (authRow) {
+            authRow.style.setProperty('display', 'flex', 'important');
+            authRow.style.setProperty('align-items', 'center', 'important');
+            authRow.style.setProperty('gap', '14px', 'important');
         }
 
         document.body.classList.add('site-has-header');

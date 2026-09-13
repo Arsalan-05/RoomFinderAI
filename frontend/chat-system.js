@@ -184,6 +184,8 @@ class ChatSystem {
 
         // Setup real-time subscription
         this.setupRealtimeSubscription();
+        // Backs it up, because realtime is not guaranteed to fire.
+        this.startMessagePolling();
 
         // Mark chat system as successfully initialized
         this.chatSystemStatus.isInitialized = true;
@@ -576,6 +578,10 @@ class ChatSystem {
             });
 
             chatMessagesContainer.scrollTop = chatMessagesContainer.scrollHeight;
+            // What the poll below compares against, so it only redraws when
+            // something actually arrived.
+            this.renderedMessageCount = messages.length;
+            this.renderedLastMessageId = messages.length ? messages[messages.length - 1].id : null;
             console.log('✅ Messages loaded successfully:', messages.length, 'messages displayed');
             
         } catch (error) {
@@ -649,41 +655,25 @@ class ChatSystem {
      * Ensure user profiles exist for both users
      */
     async ensureUserProfiles(currentUser, listing) {
-        // Check current user profile
-        const { data: currentProfile, error: currentError } = await this.supabase
-            .from('profiles')
-            .select('email')
-            .eq('email', currentUser.email)
-            .single();
-
-        if (currentError || !currentProfile) {
-            await this.supabase
-                .from('profiles')
-                .insert({
-                    email: currentUser.email,
-                    first_name: currentUser.firstName || 'User',
-                    last_name: currentUser.lastName || '',
-                    created_at: new Date().toISOString()
-                });
+        // Both rows are created server-side now. This used to select from
+        // `profiles` and insert into it straight from the browser, which is why
+        // the anon key needed read and write access to a table holding every
+        // user's address and phone number.
+        //
+        // The placeholder names the old code wrote ('User', '') are gone with
+        // it: the server creates the row with an address and nothing else,
+        // rather than stamping a fake first name over a profile the person may
+        // fill in properly later.
+        const profiles = window.RoomFinderProfiles;
+        if (!profiles) {
+            console.warn('Profiles client not loaded — cannot set up chat profiles');
+            return;
         }
 
-        // Check listing owner profile
-        const { data: ownerProfile, error: ownerError } = await this.supabase
-            .from('profiles')
-            .select('email')
-            .eq('email', listing.user_email)
-            .single();
-
-        if (ownerError || !ownerProfile) {
-            await this.supabase
-                .from('profiles')
-                .insert({
-                    email: listing.user_email,
-                    first_name: 'User',
-                    last_name: '',
-                    created_at: new Date().toISOString()
-                });
-        }
+        await Promise.all([
+            profiles.ensureProfile(currentUser?.email),
+            profiles.ensureProfile(listing?.user_email)
+        ]);
     }
 
     /**
@@ -691,12 +681,23 @@ class ChatSystem {
      */
     async findOrCreateConversation(currentUser, listing) {
         // Select only needed columns to reduce egress costs
-        const { data: conversations, error } = await this.supabase
+        // Match either direction. Filtering on sender AND receiver missed the
+        // thread whenever the other party wrote first, so both sides ended up
+        // with their own conversation for the same listing and neither saw the
+        // other's messages. Fetch by listing and pair them off client-side,
+        // as listings.html does.
+        const { data: allForListing, error } = await this.supabase
             .from('conversations')
             .select('id, listing_id, sender_email, receiver_email, created_at')
-            .eq('listing_id', listing.id)
-            .eq('sender_email', currentUser.email)
-            .eq('receiver_email', listing.user_email);
+            .eq('listing_id', listing.id);
+
+        const me = (currentUser.email || '').toLowerCase();
+        const other = (listing.user_email || '').toLowerCase();
+        const conversations = (allForListing || []).filter(c => {
+            const a = (c.sender_email || '').toLowerCase();
+            const b = (c.receiver_email || '').toLowerCase();
+            return (a === me && b === other) || (a === other && b === me);
+        });
 
         if (error) {
             throw error;
@@ -713,6 +714,9 @@ class ChatSystem {
                 listing_id: listing.id,
                 sender_email: currentUser.email,
                 receiver_email: listing.user_email,
+                // Tags the thread so a shared inbox can separate sublease
+                // conversations from listing ones. Callers pass listing.context.
+                context: listing.context || 'listing',
                 created_at: new Date().toISOString()
             })
             .select()
@@ -791,6 +795,71 @@ class ChatSystem {
     /**
      * Setup real-time subscription for messages
      */
+    /**
+     * Checks for new messages on a timer, as well as over the realtime socket.
+     *
+     * Realtime was the only way a new message reached the page, so whenever the
+     * socket did not fire — the table missing from the publication, a dropped
+     * connection, a laptop coming back from sleep — messages simply did not
+     * appear and the only way to see them was to reload the page. A chat you
+     * have to refresh is not a chat.
+     *
+     * The check is deliberately cheap: one row, id only. Redrawing costs a full
+     * rebuild of the message list, so it only happens when the newest message
+     * is not the one already on screen.
+     */
+    startMessagePolling() {
+        this.stopMessagePolling();
+
+        const every = this.options?.pollingInterval || 3000;
+        this.messagePollTimer = setInterval(async () => {
+            if (!this.currentConversationId) return;
+            // Nothing to update while nobody is looking, and this is what stops
+            // a backgrounded tab polling all night.
+            if (typeof document !== 'undefined' && document.hidden) return;
+            if (this.messagePollInFlight) return;
+
+            this.messagePollInFlight = true;
+            try {
+                const table = this.mode === 'roommate' ? 'roommate_messages' : 'messages';
+                const { data, error } = await this.supabase
+                    .from(table)
+                    .select('id')
+                    .eq('conversation_id', this.currentConversationId)
+                    .order('created_at', { ascending: false })
+                    .limit(1);
+
+                if (error) return;
+                const newest = data && data.length ? data[0].id : null;
+                if (newest && newest !== this.renderedLastMessageId) {
+                    await this.loadMessages(this.currentConversationId);
+                }
+            } catch (e) {
+                // A failed poll is not worth telling anyone about; the next one
+                // is three seconds away.
+            } finally {
+                this.messagePollInFlight = false;
+            }
+        }, every);
+
+        // Coming back to the tab should not wait out the interval.
+        if (typeof document !== 'undefined' && !this._visibilityHooked) {
+            this._visibilityHooked = true;
+            document.addEventListener('visibilitychange', () => {
+                if (!document.hidden && this.currentConversationId) {
+                    this.loadMessages(this.currentConversationId).catch(() => {});
+                }
+            });
+        }
+    }
+
+    stopMessagePolling() {
+        if (this.messagePollTimer) {
+            clearInterval(this.messagePollTimer);
+            this.messagePollTimer = null;
+        }
+    }
+
     setupRealtimeSubscription() {
         // Validate supabase client
         if (!this.supabase) {
@@ -896,15 +965,35 @@ class ChatSystem {
     }
 
     async loadListingConversationsWithUnread(currentUser) {
+        // Listings are fetched separately rather than embedded. The embed
+        // `listings (title, id)` needed the foreign key on
+        // conversations.listing_id, which was removed so a conversation can
+        // also reference a sublease_request. Without it PostgREST returns
+        // PGRST200 and the whole inbox fails to load.
         const { data: conversations, error } = await this.supabase
             .from('conversations')
-            .select(`*, listings (title, id)`)
+            .select('*')
             .or(`sender_email.eq.${currentUser.email},receiver_email.eq.${currentUser.email}`)
             .order('created_at', { ascending: false });
 
         if (error) {
             console.error('Error loading conversations:', error);
             return [];
+        }
+
+        const listingIds = [...new Set((conversations || [])
+            .map(c => c.listing_id).filter(Boolean))];
+        const listingsById = {};
+        if (listingIds.length) {
+            const { data: listingRows } = await this.supabase
+                .from('listings')
+                .select('id, title')
+                .in('id', listingIds);
+            for (const l of listingRows || []) listingsById[l.id] = l;
+        }
+        for (const c of conversations || []) {
+            // Sublease threads have no listing row; the title falls back below.
+            c.listings = listingsById[c.listing_id] || null;
         }
 
         const result = [];
@@ -1537,6 +1626,8 @@ class ChatSystem {
         // Remove event listeners
         window.removeEventListener('online', this.handleOnline);
         window.removeEventListener('offline', this.handleOffline);
+
+        this.stopMessagePolling();
 
         // Unsubscribe from channels
         if (this.messageChannel) {

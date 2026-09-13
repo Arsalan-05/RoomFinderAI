@@ -5,6 +5,13 @@ const path = require('path');
 const fs = require('fs');
 const { PLATFORM_STATUS } = require('./platform-status');
 const { sendInjectedHtml, createHtmlInjectionMiddleware } = require('./html-inject');
+const { verifyAppleIdentityToken } = require('./apple-auth');
+const { registerComplianceRoutes } = require('./account-compliance');
+const { registerMessagingRoutes } = require('./messaging');
+const { registerPushRoutes, notifyNewMessage } = require('./push');
+const { startNegotiatorDaemon } = require('./negotiator-daemon');
+const { registerProfileRoutes } = require('./profiles');
+const { validatePropertyPhoto } = require('./photo-validation');
 const { callAI, getAIStatus } = require('./ai-providers');
 const { success: apiSuccess, notFound: apiNotFound, error: apiError } = require('./api-response');
 const {
@@ -152,9 +159,34 @@ async function testBrevoApiKey() {
 // Test API key after a short delay to let server start
 setTimeout(testBrevoApiKey, 2000);
 
-async function verifyTurnstileToken(token) {
+/**
+ * True when the request came from inside one of our apps.
+ *
+ * Each app appends its own marker to the stock user agent - iOS via
+ * WebViewStore's applicationNameForUserAgent, Android via AppUserAgent - so
+ * this identifies app traffic without either app pretending to be a browser.
+ */
+function isAppRequest(req) {
+    return /RoomFinderAI\/[\d.]+ (iOS|Android)/.test(req?.headers?.['user-agent'] || '');
+}
+
+/**
+ * @param {string} token
+ * @param {object} [req]  when the request came from the iOS app the check is
+ *   skipped, because it cannot be completed there.
+ *
+ * Cloudflare Turnstile runs in an iframe that needs third-party storage, and
+ * WKWebView refuses it. The widget therefore never solves inside the app: the
+ * Send Reset Code button stayed disabled forever and people could not reset
+ * their password at all. Rate limiting still applies to these routes, and the
+ * reset itself needs a six digit code delivered to the address being reset, so
+ * the worst a forged app user agent buys is a rate limited email to somebody
+ * who owns that inbox.
+ */
+async function verifyTurnstileToken(token, req) {
     const secret = process.env.TURNSTILE_SECRET_KEY?.trim();
     if (!secret) return { ok: true, skipped: true };
+    if (req && isAppRequest(req)) return { ok: true, skipped: 'ios-app' };
     if (!token) return { ok: false, error: 'Bot verification required' };
     try {
         const params = new URLSearchParams();
@@ -172,14 +204,59 @@ async function verifyTurnstileToken(token) {
     }
 }
 
+const crypto = require('crypto');
 const { createClient } = require('@supabase/supabase-js');
 const multer = require('multer');
-const { DocumentAnalysisClient, AzureKeyCredential } = require('@azure/ai-form-recognizer');
-const { FaceClient } = require('@azure/cognitiveservices-face');
-const { CognitiveServicesCredentials } = require('@azure/ms-rest-azure-js');
 // FormData and fetch are available globally in Node.js 18+
 
 const app = express();
+
+/**
+ * One address per page, and no dead pages answering 200.
+ *
+ * roomfinderai.com and www.roomfinderai.com both served every page with a 200,
+ * so search engines saw two copies of the site and split whatever ranking it
+ * had between them. The sitemap has always said www, so that is the one kept.
+ *
+ * Runs before the static handler, so it catches every page rather than only
+ * the routes declared below it. API calls are left alone: a redirect in the
+ * middle of a POST would lose the body.
+ */
+const CANONICAL_HOST = process.env.CANONICAL_HOST || 'www.roomfinderai.com';
+
+app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return next();
+    if (req.path.startsWith('/api/')) return next();
+
+    // ads.txt answers on whichever host asked for it, rather than being sent to
+    // www. AdSense registered the site as the bare apex, so its crawler starts
+    // there, and from plain http that was two hops to reach the file. Ad
+    // verification crawlers cap how many redirects they follow, and a miss here
+    // marks the whole site's inventory unauthorised. The file is identical on
+    // both hosts, so there is nothing to keep in sync by serving it twice.
+    if (req.path.toLowerCase() === '/ads.txt') return next();
+
+    const host = (req.headers.host || '').toLowerCase().split(':')[0];
+
+    // Only the bare apex is moved. Railway's own hostname and anything local
+    // are left alone so previews and health checks keep working.
+    if (host === 'roomfinderai.com') {
+        return res.redirect(301, `https://${CANONICAL_HOST}${req.originalUrl}`);
+    }
+
+    // Pages that no longer exist, sent to the nearest thing that does rather
+    // than answering 200 with content that was removed from navigation months
+    // ago. student-housing was dropped but is still being served and indexed.
+    const GONE = {
+        '/student-housing.html': '/listings.html',
+        '/student-housing': '/listings.html'
+    };
+    const moved = GONE[req.path.toLowerCase()];
+    if (moved) return res.redirect(301, `https://${CANONICAL_HOST}${moved}`);
+
+    next();
+});
+
 const port = process.env.PORT || 3000;
 
 registerProcessHandlers();
@@ -310,6 +387,9 @@ try {
 
 // Initialize Supabase client with error handling
 let supabase;
+// Separate client for sign-in only, so a user's session can never attach
+// itself to the client that does the database work. See the note below.
+let supabaseAuth;
 try {
     console.log('🔍 DEBUG: Attempting Supabase initialization...');
     console.log('🔍 DEBUG: config.SUPABASE_URL:', config.SUPABASE_URL ? config.SUPABASE_URL.substring(0, 30) + '...' : 'NOT SET');
@@ -322,9 +402,34 @@ try {
         const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY || config.SUPABASE_ANON_KEY;
         console.log('🔍 DEBUG: SUPABASE_SERVICE_ROLE_KEY exists:', !!process.env.SUPABASE_SERVICE_ROLE_KEY);
         console.log('🔍 DEBUG: Using key type:', process.env.SUPABASE_SERVICE_ROLE_KEY ? 'SERVICE_ROLE' : 'ANON');
-        supabase = createClient(config.SUPABASE_URL, supabaseKey);
+
+        // Never signs anybody in. supabase-js keeps the session from a
+        // signInWithPassword on the client it was called on and sends that
+        // user's token on every request afterwards — so one login turned this
+        // shared client from the service role into whoever logged in last, and
+        // every write after that ran with their permissions. Row level security
+        // then refused new rows, which is what "We couldn't save your document"
+        // was: an insert running as a tenant who has no right to create a
+        // verification record.
+        //
+        // It restarts clean and breaks after the first login, which is why it
+        // looked intermittent.
+        supabase = createClient(config.SUPABASE_URL, supabaseKey, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+        });
+
+        // Signing in happens here instead, on the anon key, which is what an
+        // anon key is for. Whatever session this ends up holding cannot affect
+        // the client above.
+        supabaseAuth = createClient(config.SUPABASE_URL, config.SUPABASE_ANON_KEY, {
+            auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false }
+        });
+
         serviceStatus.supabase = true;
         console.log('✅ Supabase initialized successfully');
+        if (!process.env.SUPABASE_SERVICE_ROLE_KEY) {
+            console.warn('⚠️ No SUPABASE_SERVICE_ROLE_KEY - writes run as anon and row level security will refuse new rows.');
+        }
     } else {
         console.log('⚠️ Supabase not initialized - missing or default credentials');
         console.log('🔍 DEBUG: URL includes "your-project"?', config.SUPABASE_URL?.includes('your-project'));
@@ -337,58 +442,10 @@ try {
     console.log('❌ Supabase initialization failed:', error.message);
 }
 
-// Initialize Azure Document Intelligence client
-let documentClient;
-try {
-    console.log('🔍 Azure Document Intelligence Config Check:');
-    console.log('- KEY exists:', !!config.AZURE_DOCUMENT_INTELLIGENCE_KEY);
-    console.log('- ENDPOINT exists:', !!config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT);
-    console.log('- KEY length:', config.AZURE_DOCUMENT_INTELLIGENCE_KEY?.length || 0);
-    console.log('- ENDPOINT value:', config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || 'undefined');
-    
-    if (config.AZURE_DOCUMENT_INTELLIGENCE_KEY && config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) {
-        documentClient = new DocumentAnalysisClient(
-            config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT,
-            new AzureKeyCredential(config.AZURE_DOCUMENT_INTELLIGENCE_KEY)
-        );
-        serviceStatus.azure.documentIntelligence = true;
-        console.log('✅ Azure Document Analysis initialized successfully');
-    } else {
-        console.log('⚠️ Azure Document Intelligence not initialized - missing credentials');
-        console.log('  - KEY missing:', !config.AZURE_DOCUMENT_INTELLIGENCE_KEY);
-        console.log('  - ENDPOINT missing:', !config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT);
-    }
-} catch (error) {
-    console.log('❌ Azure Document Intelligence initialization failed:', error.message);
-    console.log('⚠️ Server will continue without Azure Document Intelligence');
-    documentClient = null;
-}
-
-// Initialize Azure Face client
-let faceClient;
-try {
-    console.log('🔍 Azure Face API Config Check:');
-    console.log('- KEY exists:', !!config.AZURE_FACE_KEY);
-    console.log('- ENDPOINT exists:', !!config.AZURE_FACE_ENDPOINT);
-    console.log('- KEY length:', config.AZURE_FACE_KEY?.length || 0);
-    console.log('- ENDPOINT value:', config.AZURE_FACE_ENDPOINT || 'undefined');
-    
-    if (config.AZURE_FACE_KEY && config.AZURE_FACE_ENDPOINT) {
-        const credentials = new CognitiveServicesCredentials(config.AZURE_FACE_KEY);
-        faceClient = new FaceClient(credentials, config.AZURE_FACE_ENDPOINT);
-        serviceStatus.azure.face = true;
-        console.log('✅ Azure Face API initialized successfully');
-    } else {
-        console.log('⚠️ Azure Face API not initialized - missing credentials');
-        console.log('  - KEY missing:', !config.AZURE_FACE_KEY);
-        console.log('  - ENDPOINT missing:', !config.AZURE_FACE_ENDPOINT);
-    }
-} catch (error) {
-    console.log('❌ Azure Face API initialization failed:', error.message);
-    console.log('⚠️ Server will continue without Azure Face API');
-    faceClient = null;
-}
-
+// ID and selfie checks run on Cloudflare Workers AI. Azure used to sit behind
+// them as a fallback and has been removed: its Face API errored on every call,
+// and because an errored check returned "ok", a document uploaded into the
+// selfie slot was accepted with no check having run at all.
 // Configure multer for file uploads
 const upload = multer({
     storage: multer.memoryStorage(),
@@ -396,16 +453,23 @@ const upload = multer({
         fileSize: 10 * 1024 * 1024, // 10MB limit
     },
     fileFilter: (req, file, cb) => {
-        // Allow only image files for ID verification
-        if (file.fieldname === 'idDocument' || file.fieldname === 'facePhoto') {
-            if (file.mimetype.startsWith('image/')) {
-                cb(null, true);
-            } else {
-                cb(new Error('Only image files are allowed'), false);
-            }
-        } else {
-            cb(new Error('Invalid field name'), false);
+        // Images only, and only for fields that actually expect a file.
+        //
+        // 'photos' is listing photos from the iOS app. It was missing, so
+        // every upload from the app was rejected by this filter before the
+        // route ever ran — which surfaced as a bare 500 from the global error
+        // handler rather than anything explaining the problem.
+        const fileFields = ['idDocument', 'facePhoto', 'photos'];
+
+        if (!fileFields.includes(file.fieldname)) {
+            cb(new Error(`Unexpected file field: ${file.fieldname}`), false);
+            return;
         }
+        if (!file.mimetype.startsWith('image/')) {
+            cb(new Error('Only image files are allowed'), false);
+            return;
+        }
+        cb(null, true);
     }
 });
 
@@ -597,7 +661,123 @@ app.get('/listings-new', blockInProduction, (req, res) => {
 const frontendPath = path.join(__dirname, '..', 'frontend');
 console.log('🌐 Serving frontend files from:', frontendPath);
 
-// Inject platform-status banner assets into HTML pages before static fallback
+// Hand a native Google sign-in back to the iOS app.
+//
+// The app cannot run Google OAuth inside its web view — Google rejects
+// embedded user agents — so it opens the consent screen in a real Safari
+// session, which can only return through a redirect URI already registered on
+// the OAuth client. The only one registered is the site root, so Google lands
+// here with ?code=…, and this bounces it into the app's custom scheme.
+//
+// Gated on the state prefix the app sets, so ordinary traffic to the homepage
+// (including anyone arriving with an unrelated ?code= parameter) falls
+// straight through to the normal page. The authorization code is single-use
+// and worthless without the client secret, which never leaves the server.
+const IOS_APP_SCHEME = 'roomfinderai';
+const IOS_OAUTH_STATE_PREFIX = 'rfios.';
+
+// Where Google sends the app's sign-in back to.
+//
+// The site root, because that is the only redirect URI registered on the OAuth
+// client — verified against Google's authorization endpoint rather than
+// assumed. A dedicated /api/auth/google/native-callback route also exists
+// below and is cleaner; switch NATIVE_REDIRECT_URI to it once that URI has
+// been added in the Google console, and nothing else has to change.
+const GOOGLE_NATIVE_REDIRECT_PATH = '/api/auth/google/native-callback';
+const GOOGLE_NATIVE_REDIRECT_URI = 'https://www.roomfinderai.com';
+
+app.get('/', (req, res, next) => {
+    const { code, error, state } = req.query;
+    if (typeof state !== 'string' || !state.startsWith(IOS_OAUTH_STATE_PREFIX)) {
+        return next();
+    }
+    if (!code && !error) {
+        return next();
+    }
+
+    const params = new URLSearchParams();
+    if (error) params.set('error', String(error));
+    if (code) params.set('code', String(code));
+    params.set('state', state);
+
+    return res.redirect(`${IOS_APP_SCHEME}://auth/google?${params.toString()}`);
+});
+
+
+/**
+ * Link previews for a shared listing.
+ *
+ * listing_details.html is a static shell that fetches the room with JavaScript,
+ * so a crawler for iMessage, WhatsApp, Slack or Twitter — none of which run
+ * JS — saw a page with no title, no description and no image, and rendered a
+ * blank card. Sharing a room looked broken, which is the one moment the
+ * listing most needs to look good.
+ *
+ * The tags are injected server-side for this one page, from the same row the
+ * client is about to fetch. Anything without an id, or an id that does not
+ * resolve, falls straight through to the normal page.
+ */
+app.get('/listing_details.html', async (req, res, next) => {
+    const id = String(req.query.id || '').trim();
+    if (!id || !supabase) return next();
+
+    try {
+        const { data: listing } = await supabase
+            .from('listings')
+            .select('id, title, description, price, city, media')
+            .eq('id', id)
+            .maybeSingle();
+
+        if (!listing) return next();
+
+        const filePath = path.join(frontendPath, 'listing_details.html');
+        if (!fs.existsSync(filePath)) return next();
+
+        const escape = (value) => String(value || '')
+            .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+
+        const image = Array.isArray(listing.media) ? listing.media.find(Boolean) : null;
+        const price = Number(listing.price) > 0 ? `$${Math.round(listing.price)}/month` : null;
+        const title = [listing.title, listing.city].filter(Boolean).join(' - ');
+        // The price belongs in the preview: it is the first thing anyone wants
+        // to know and the reason they tap.
+        const summary = [price, listing.description]
+            .filter(Boolean).join(' - ').slice(0, 200);
+        const pageUrl = `https://www.roomfinderai.com/listing_details.html?id=${encodeURIComponent(id)}`;
+
+        const tags = [
+            `<meta property="og:type" content="website">`,
+            `<meta property="og:site_name" content="RoomFinderAI">`,
+            `<meta property="og:title" content="${escape(title)}">`,
+            `<meta property="og:description" content="${escape(summary)}">`,
+            `<meta property="og:url" content="${escape(pageUrl)}">`,
+            image ? `<meta property="og:image" content="${escape(image)}">` : '',
+            image ? `<meta property="og:image:width" content="1200">` : '',
+            image ? `<meta property="og:image:height" content="630">` : '',
+            // summary_large_image is what makes the photo fill the card rather
+            // than sit in a thumbnail beside the text.
+            `<meta name="twitter:card" content="${image ? 'summary_large_image' : 'summary'}">`,
+            `<meta name="twitter:title" content="${escape(title)}">`,
+            `<meta name="twitter:description" content="${escape(summary)}">`,
+            image ? `<meta name="twitter:image" content="${escape(image)}">` : '',
+            `<meta name="description" content="${escape(summary)}">`
+        ].filter(Boolean).join('\n');
+
+        let html = fs.readFileSync(filePath, 'utf8');
+        html = html.includes('</head>')
+            ? html.replace('</head>', `${tags}\n</head>`)
+            : `${tags}\n${html}`;
+
+        res.setHeader('Content-Type', 'text/html; charset=utf-8');
+        return res.send(html);
+    } catch (error) {
+        console.error('Link preview injection failed:', error.message);
+        return next();
+    }
+});
+
+// Inject shared site assets into HTML pages before static fallback
 app.use(createHtmlInjectionMiddleware(frontendPath));
 
 // Custom middleware to block static serving of listings.html
@@ -608,6 +788,87 @@ app.use((req, res, next) => {
         return next(); // Let it fall through to our custom routes
     }
     next();
+});
+
+// Account deletion, reporting and blocking — App Store guidelines 5.1.1(v)
+// and 1.2. Registered with a getter because `supabase` is assigned during
+// async startup and would still be undefined if captured here by value.
+registerComplianceRoutes(app, () => supabase, () => supabaseAuth);
+
+// Conversations and messages for the iOS app, participant-checked server-side
+// rather than trusting the client to only ask for its own threads.
+registerMessagingRoutes(app, () => supabase);
+registerPushRoutes(app, () => supabase);
+
+// Keeps negotiating when the app is closed. Without this the AI only answers
+// landlords while someone has the app open and on screen, which is the one
+// thing the product is for.
+startNegotiatorDaemon({
+    getSupabase: () => supabase,
+    baseUrl: process.env.SELF_BASE_URL?.trim() || `http://127.0.0.1:${process.env.PORT || 3000}`,
+    notifyNewMessage
+});
+registerProfileRoutes(app, () => supabase);
+
+// Universal links: iOS fetches this file to decide whether tapping a
+// roomfinderai.com link should open the app. It has to be served from the
+// apex of /.well-known, with no extension, as application/json — Apple's
+// fetcher rejects text/plain, which is what express.static would infer from
+// an extensionless file. Registered before the static handler so it wins.
+app.get('/.well-known/apple-app-site-association', (req, res) => {
+    const aasaPath = path.join(frontendPath, '.well-known', 'apple-app-site-association');
+    if (!fs.existsSync(aasaPath)) {
+        return res.status(404).json({ error: 'Not configured' });
+    }
+    const body = fs.readFileSync(aasaPath, 'utf8');
+    // A file still carrying the placeholder Team ID would make iOS cache a
+    // broken association for days. Better to answer 404 until it is filled in.
+    if (body.includes('TEAMID')) {
+        console.warn('apple-app-site-association still contains the TEAMID placeholder — not serving it.');
+        return res.status(404).json({ error: 'Not configured' });
+    }
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    res.send(body);
+});
+
+// Android App Links: the app's manifest declares an intent-filter for
+// https://www.roomfinderai.com/listing_details.html with autoVerify="true",
+// which makes Android fetch this file at install time and check that the
+// domain vouches for this package and signing certificate. It was returning
+// 404 in production, so verification failed and every listing link anyone
+// pasted into a group chat opened Chrome instead of the app - including for
+// people who had already installed it.
+//
+// Served as a route for the same reason as the Apple file above: express.static
+// defaults to dotfiles: 'ignore', so anything under /.well-known is skipped and
+// a file placed there would 404 exactly as the missing one did.
+//
+// The fingerprint is Play's APP SIGNING certificate, not the upload
+// certificate - Play re-signs every build with its own key, so the upload
+// fingerprint would never match what is installed on a device. From
+// Play Console -> Test and release -> App integrity -> App signing.
+//
+// Android does not follow redirects when verifying, so the apex domain's 301
+// to www is not covered; roomfinderai.com would need its own intent-filter and
+// its own copy of this file.
+const ANDROID_ASSET_LINKS = [
+    {
+        relation: ['delegate_permission/common.handle_all_urls'],
+        target: {
+            namespace: 'android_app',
+            package_name: 'com.roomfinderai.android',
+            sha256_cert_fingerprints: [
+                '1E:49:95:05:54:3E:FA:51:8A:DA:CC:5A:38:39:7F:48:C1:18:DB:95:3A:48:55:AF:28:76:AC:D0:40:39:FE:71'
+            ]
+        }
+    }
+];
+
+app.get('/.well-known/assetlinks.json', (req, res) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'public, max-age=300');
+    res.send(JSON.stringify(ANDROID_ASSET_LINKS, null, 2));
 });
 
 app.use(express.static(frontendPath, {
@@ -851,11 +1112,42 @@ async function generateMarketplaceUrl({ location, price, size, amenities, roomTy
 }
 
 // Validate listing input
+/**
+ * Validates a new listing.
+ *
+ * Postal code is NOT required, and that is the whole point of this function's
+ * current shape.
+ *
+ * The Android app posts here with `postalCode: ""` - it asks the host for one
+ * "Address" line and has no postal code field at all. An empty string is
+ * falsy, so every listing submitted from the app was rejected with 400
+ * "Postal Code is required". This validation runs before the auth check below,
+ * so it fired for everyone. The app is live on Google Play and the single
+ * action it exists for could not complete: a landlord signed in, filled four
+ * steps, uploaded photos, tapped "Post Listing" and got a failure toast.
+ *
+ * Confirmed against production before changing anything - identical bodies,
+ * only the postal code differing:
+ *
+ *   postalCode ""     -> 400 {"errors":["Postal Code is required"]}
+ *   postalCode "L4T"  -> 401 {"error":"User authentication required"}
+ *
+ * The 401 is the tell: with a postal code the request clears validation and
+ * reaches the auth gate; without one it never gets there.
+ *
+ * Fixed on the server rather than in the app deliberately. An app-side fix
+ * ships in the next Play release and does nothing for the copies of 1.0.2
+ * already on people's phones; relaxing this repairs those the moment it
+ * deploys.
+ *
+ * The website is unaffected - its form has a `required` postal code input
+ * (listings.html), so it keeps sending one. Making the field optional here
+ * takes nothing away from listings that have one.
+ */
 function validateListingInput(data) {
     const errors = [];
     if (!data.city) errors.push('City is required');
     if (!data.street) errors.push('Street is required');
-    if (!data.postalCode) errors.push('Postal Code is required');
     if (!data.title) errors.push('Title is required');
     if (!data.price || isNaN(data.price)) errors.push('Valid price is required');
     if (!data.houseType) errors.push('House type is required');
@@ -863,6 +1155,378 @@ function validateListingInput(data) {
     if (!['included', 'not included'].includes(data.utilities?.toLowerCase())) errors.push('Utilities must be "included" or "not included"');
     return errors;
 }
+
+/**
+ * Listing photos, for the iOS app.
+ *
+ * The website uploads straight to Supabase storage from the browser using the
+ * anon key. An app cannot do that safely — a key inside a binary can be pulled
+ * out of it — so the app posts the image bytes here and the server does the
+ * upload with the service key.
+ *
+ * Returns public URLs in the shape `POST /api/listings` expects for `media`.
+ */
+app.post('/api/listings/photos', (req, res, next) => {
+    // Multer's own failures (rejected field name, file too large, bad form
+    // encoding) otherwise propagate to the global handler and come back as a
+    // bare "Internal server error", which says nothing about what to fix.
+    upload.array('photos', 6)(req, res, (err) => {
+        if (err) {
+            console.error('Listing photo upload rejected:', err.name, err.message);
+            return res.status(400).json({
+                success: false,
+                message: err.message || 'Those photos could not be accepted'
+            });
+        }
+        next();
+    });
+}, async (req, res) => {
+    try {
+        if (!supabase) {
+            return res.status(503).json({ success: false, message: 'Storage not connected' });
+        }
+
+        const files = req.files || [];
+        if (!files.length) {
+            return res.status(400).json({ success: false, message: 'No photos received' });
+        }
+
+        const allowed = ['image/jpeg', 'image/png', 'image/heic', 'image/heif', 'image/webp'];
+        const urls = [];
+
+        for (const file of files) {
+            if (!allowed.includes(file.mimetype)) {
+                return res.status(400).json({
+                    success: false,
+                    message: `Unsupported image type: ${file.mimetype}`
+                });
+            }
+
+            // Namespaced by uploader so a listing's photos can be found and
+            // removed with the account, and suffixed randomly so two uploads in
+            // the same second cannot overwrite each other.
+            const owner = (req.body.userEmail || 'anonymous').replace(/[^a-zA-Z0-9@._-]/g, '_');
+            const extension = (file.originalname.split('.').pop() || 'jpg').toLowerCase();
+            const path = `Photos/${owner}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+
+            const { error } = await supabase.storage
+                .from('listing-media')
+                .upload(path, file.buffer, { contentType: file.mimetype, upsert: false });
+
+            if (error) {
+                console.error('Listing photo upload failed:', error.message);
+                return res.status(500).json({ success: false, message: 'Could not upload photo' });
+            }
+
+            const { data } = supabase.storage.from('listing-media').getPublicUrl(path);
+            urls.push(data.publicUrl);
+        }
+
+        res.json({ success: true, urls });
+    } catch (error) {
+        console.error('Listing photo endpoint failed:', error);
+        res.status(500).json({ success: false, message: 'Could not upload photos' });
+    }
+});
+
+/**
+ * Draft a listing's title and description from the facts already entered.
+ *
+ * Writing the copy is the part of posting a room that people abandon halfway
+ * through, so this turns the details they have already typed — city, type,
+ * bedrooms, rent — into something they can edit rather than a blank box.
+ *
+ * The model never invents facts it was not given: the prompt forbids amenities,
+ * measurements and neighbourhood claims, because a listing that promises a
+ * balcony nobody has is worse than no description at all.
+ */
+app.post('/api/listings/draft', openAiRateLimitMiddleware, async (req, res) => {
+    try {
+        const { city, street, houseType, bedrooms, bathrooms, price, utilities, notes } = req.body || {};
+
+        if (!city && !houseType && !notes) {
+            return res.status(400).json({
+                success: false,
+                message: 'Enter at least the city and property type first'
+            });
+        }
+
+        const facts = [
+            houseType && `Property type: ${houseType}`,
+            bedrooms != null && `Bedrooms: ${bedrooms}`,
+            bathrooms != null && `Bathrooms: ${bathrooms}`,
+            price && `Monthly rent: $${price}`,
+            city && `City: ${city}`,
+            street && `Street: ${street}`,
+            utilities && `Utilities: ${utilities}`,
+            notes && `Extra notes from the host: ${notes}`
+        ].filter(Boolean).join('\n');
+
+        const result = await callAI(config, {
+            maxTokens: 320,
+            temperature: 0.7,
+            messages: [
+                {
+                    role: 'system',
+                    content: [
+                        'You write rental listings for RoomFinderAI.',
+                        'Return ONLY strict JSON: {"title": string, "description": string}.',
+                        'The title is at most 60 characters, concrete, no ALL CAPS, no emoji, no exclamation marks.',
+                        'The description is 2 to 4 short sentences, plain and warm, written for a tenant.',
+                        'Use ONLY the facts given. Never invent amenities, square footage, transit links, furniture, or neighbourhood claims.',
+                        'Do not mention price in the description; it is shown separately.',
+                        'Never use em dashes.'
+                    ].join(' ')
+                },
+                { role: 'user', content: facts }
+            ]
+        });
+
+        // callAI returns { content, ... }; the model occasionally wraps JSON in
+        // a code fence, which JSON.parse will not accept.
+        const raw = String(result?.content || '').replace(/```json|```/g, '').trim();
+
+        let draft;
+        try {
+            draft = JSON.parse(raw);
+        } catch (e) {
+            console.warn('Listing draft was not valid JSON:', raw.slice(0, 200));
+            return res.status(502).json({ success: false, message: 'The assistant returned an unusable draft. Please try again.' });
+        }
+
+        const title = String(draft.title || '').trim().slice(0, 80);
+        const description = String(draft.description || '').trim();
+
+        if (!title || !description) {
+            return res.status(502).json({ success: false, message: 'The assistant returned an empty draft. Please try again.' });
+        }
+
+        res.json({ success: true, title, description });
+    } catch (error) {
+        console.error('Listing draft failed:', error.message);
+        res.status(500).json({ success: false, message: 'Could not write a draft right now' });
+    }
+});
+
+// ---------------------------------------------------------------------------
+// Ported from the hasan branch so that deploying this one does not REMOVE
+// account deletion. Production already answers POST /api/account/delete (401
+// "Email is required" on an empty body) while origin/main has no such route,
+// so a deploy straight from main would take away a feature that Google Play's
+// Data safety declaration and /delete-account.html both promise works.
+//
+// The Android app sends { email, password } (AccountDeletionService line 60),
+// which is exactly what this handler expects.
+// ---------------------------------------------------------------------------
+/**
+ * Delete a user's account and the data attached to it.
+ *
+ * The Android app had a "Delete account" button that cleared local
+ * SharedPreferences, said "Account deleted successfully" and logged the user
+ * out. Nothing left the server: the profile, the listings and the messages
+ * were all still there, and the confirmation dialog promised the opposite.
+ * Google Play's Data safety declaration says deletion works, and
+ * /delete-account.html says so publicly, so it has to actually work.
+ *
+ * Identity is proved with the account password rather than the `user-email`
+ * header the other endpoints trust. That header is fine for deleting one
+ * listing - the worst case is bounded and recoverable. It is not fine here:
+ * anyone who guessed an email could erase somebody's account. The password is
+ * checked exactly the way /api/login checks it, Supabase Auth first and the
+ * bcrypt hash in `profiles` second, so an account created either way can be
+ * closed by its owner and by nobody else.
+ *
+ * Accounts created through Google sign-in have no password to check. Those get
+ * a 409 and are pointed at the documented email route rather than a weaker
+ * check that would undermine the whole point of asking.
+ *
+ * Row deletion is best-effort per table and deliberately does not abort on the
+ * first failure. The schema has grown tables at different times, not all of
+ * them have the same owner column, and some may not exist in every
+ * environment. Stopping at the first missing table would leave an account
+ * half-deleted, which is worse than continuing and reporting what was removed.
+ * The auth user is deleted last, so a failure part-way through leaves an
+ * account the owner can still sign into and retry with.
+ */
+app.post('/api/account/delete', authRateLimitMiddleware, async (req, res) => {
+    try {
+        const { email, password } = req.body || {};
+
+        if (!email || !password) {
+            return res.status(400).json({ error: 'Email and password are required' });
+        }
+        if (!supabase) {
+            return res.status(500).json({ error: 'Database not connected' });
+        }
+
+        const normalisedEmail = String(email).trim().toLowerCase();
+
+        // ---- prove it is really them -------------------------------------
+        let authUserId = null;
+        let verified = false;
+
+        try {
+            const { data, error } = await supabase.auth.signInWithPassword({
+                email: normalisedEmail,
+                password: password
+            });
+            if (!error && data && data.user) {
+                verified = true;
+                authUserId = data.user.id;
+            }
+        } catch (e) {
+            console.log('Account delete: Supabase Auth check failed:', e.message);
+        }
+
+        const { data: profile } = await supabase
+            .from('profiles')
+            .select('id, email, password')
+            .eq('email', normalisedEmail)
+            .maybeSingle();
+
+        if (!verified && profile && profile.password) {
+            try {
+                verified = await bcrypt.compare(password, profile.password);
+            } catch (e) {
+                console.log('Account delete: bcrypt check failed:', e.message);
+            }
+        }
+
+        if (!verified) {
+            // Distinguish "wrong password" from "this account never had one",
+            // because the second is not the user's mistake and needs a
+            // different instruction rather than a retry.
+            if (profile && !profile.password) {
+                return res.status(409).json({
+                    error: 'This account signs in with Google, so there is no password to confirm. ' +
+                           'Email support@roomfinderai.com from this address and we will delete it for you.',
+                    code: 'no_password'
+                });
+            }
+            return res.status(401).json({ error: 'Incorrect password', code: 'bad_password' });
+        }
+
+        console.log('Deleting account and data for:', normalisedEmail);
+
+        // ---- remove the rows ---------------------------------------------
+        // (table, column) pairs. Unknown tables and columns are skipped, not
+        // fatal - see the comment above.
+        const ownedByEmail = [
+            ['listings', 'user_email'],
+            ['favorites', 'user_email'],
+            ['sublease_requests', 'user_email'],
+            ['sublease_matches', 'user_email'],
+            ['user_verifications', 'user_email'],
+            ['subscriptions', 'user_email'],
+            ['user_activities', 'user_email'],
+            ['user_payment_methods', 'user_email'],
+            ['bank_information', 'user_email'],
+            ['ai_negotiations', 'user_email'],
+            ['ai_chats', 'user_email'],
+            ['govdocs', 'user_email'],
+            ['notifications', 'user_email'],
+            ['conversations', 'user_email'],
+            // the same tables again, for the ones that store `email`
+            ['favorites', 'email'],
+            ['subscriptions', 'email'],
+            ['user_verifications', 'email'],
+            ['user_activities', 'email'],
+            ['ai_chats', 'email'],
+            ['notifications', 'email']
+        ];
+
+        const removed = [];
+        const skipped = [];
+
+        for (const [table, column] of ownedByEmail) {
+            try {
+                const { error } = await supabase.from(table).delete().eq(column, normalisedEmail);
+                if (error) {
+                    skipped.push(table + '.' + column + ': ' + error.message);
+                } else {
+                    removed.push(table + '.' + column);
+                }
+            } catch (e) {
+                skipped.push(table + '.' + column + ': ' + e.message);
+            }
+        }
+
+        // Uploaded files: listing photos and profile pictures live in storage,
+        // not in a table, so deleting rows alone would leave the images public.
+        for (const bucket of ['profile-images', 'listing-images']) {
+            try {
+                const { data: files } = await supabase.storage.from(bucket).list(normalisedEmail, { limit: 200 });
+                if (files && files.length) {
+                    await supabase.storage
+                        .from(bucket)
+                        .remove(files.map(function (f) { return normalisedEmail + '/' + f.name; }));
+                    removed.push('storage:' + bucket);
+                }
+            } catch (e) {
+                skipped.push('storage:' + bucket + ': ' + e.message);
+            }
+        }
+
+        // The profile row last among the tables, so the steps above can still
+        // look the account up if any of them need to.
+        try {
+            const { error } = await supabase.from('profiles').delete().eq('email', normalisedEmail);
+            if (error) {
+                skipped.push('profiles: ' + error.message);
+            } else {
+                removed.push('profiles');
+            }
+        } catch (e) {
+            skipped.push('profiles: ' + e.message);
+        }
+
+        // ---- and finally the login itself --------------------------------
+        // Without this the address stays taken and they could still sign in.
+        // Needs the service-role key; with only the anon key this is a no-op
+        // and we say so rather than pretending.
+        let authDeleted = false;
+        if (process.env.SUPABASE_SERVICE_ROLE_KEY) {
+            try {
+                if (!authUserId) {
+                    const { data: list } = await supabase.auth.admin.listUsers();
+                    const match = list && list.users
+                        ? list.users.find(function (u) { return (u.email || '').toLowerCase() === normalisedEmail; })
+                        : null;
+                    if (match) authUserId = match.id;
+                }
+                if (authUserId) {
+                    const { error } = await supabase.auth.admin.deleteUser(authUserId);
+                    if (error) {
+                        skipped.push('auth user: ' + error.message);
+                    } else {
+                        authDeleted = true;
+                        removed.push('auth user');
+                    }
+                }
+            } catch (e) {
+                skipped.push('auth user: ' + e.message);
+            }
+        } else {
+            skipped.push('auth user: SUPABASE_SERVICE_ROLE_KEY not set on this server');
+        }
+
+        console.log('Account delete for ' + normalisedEmail + ': removed=' + removed.length +
+                    ', skipped=' + skipped.length + ', authDeleted=' + authDeleted);
+        if (skipped.length) {
+            console.log('   skipped:', skipped.join(' | '));
+        }
+
+        return res.json({
+            message: 'Account deleted',
+            email: normalisedEmail,
+            authDeleted: authDeleted,
+            removed: removed
+        });
+    } catch (error) {
+        console.error('Error in /api/account/delete:', error.message);
+        return res.status(500).json({ error: 'Failed to delete account' });
+    }
+});
 
 // API: Add a new listing
 app.post('/api/listings', async (req, res) => {
@@ -890,7 +1554,8 @@ app.post('/api/listings', async (req, res) => {
                     id: uuidv4(),
                     city,
                     street,
-                    postalCode: postalCode,
+                    // Absent is absent - do not write "" into the column.
+                    postalCode: postalCode || null,
                     title,
                     price: parseFloat(price),
                     house_type: houseType,
@@ -954,23 +1619,116 @@ app.post('/api/listings', async (req, res) => {
 });
 
 // Transform listing data to match Android model
-function transformListingForAndroid(listing, verificationMap = {}) {
-    // Extract imageUrl from media array, ensuring it's always a string
-    let imageUrl = null;
-    if (listing.media && listing.media.length > 0) {
-        const firstMedia = listing.media[0];
-        if (typeof firstMedia === 'string') {
-            // If media[0] is already a string URL
-            imageUrl = firstMedia;
-        } else if (firstMedia && typeof firstMedia === 'object') {
-            // If media[0] is an object, extract the URL
-            imageUrl = firstMedia.url || firstMedia.data || null;
+
+/**
+ * Which of these accounts are verified, as a map of email to 'verified'.
+ *
+ * Four copies of this query used to read `.select('user_email, status')`.
+ * There is no `status` column on user_verifications - the statuses live in
+ * `id_verification_status` and `face_verification_status` - so every call
+ * failed with "column does not exist", the error was checked but only used to
+ * skip the assignment, and the map came back empty. Every listing was
+ * therefore unverified no matter who posted it, and the badge never appeared
+ * for anybody.
+ *
+ * Both halves have to be verified. Approving in the admin queue sets them
+ * together, but a row part-way through review must not be shown as verified.
+ */
+async function fetchVerificationMap(supabase, emails) {
+    const unique = [...new Set((emails || []).filter(Boolean))];
+    if (!unique.length || !supabase) return {};
+
+    const map = {};
+    try {
+        const { data, error } = await supabase
+            .from('user_verifications')
+            .select('user_email, id_verification_status, face_verification_status')
+            .in('user_email', unique);
+
+        if (error) {
+            // Said out loud. Swallowing this is what let it go unnoticed.
+            console.error('Verification lookup failed, badges will be missing:', error.message);
+            return {};
         }
+
+        for (const row of data || []) {
+            if (row.id_verification_status === 'verified' && row.face_verification_status === 'verified') {
+                map[row.user_email] = 'verified';
+            }
+        }
+    } catch (err) {
+        console.error('Verification lookup threw, badges will be missing:', err.message || err);
     }
+    return map;
+}
+
+
+/**
+ * Narrows a listings query by free text, a word at a time.
+ *
+ * It used to match the whole box against each field on its own:
+ * `title ILIKE %<everything typed>%` OR city ILIKE ... and so on. So anything
+ * spanning two fields found nothing. "101st Los Angeles" is a street in one
+ * column and a city in another, "Toronto apartment" is a city and a property
+ * type, and pasting an address - which is exactly what someone does when they
+ * are looking for one room they have already seen - matched nothing at all.
+ * Postal codes were not searched under any spelling.
+ *
+ * Each word now has to appear in some field, but not the same field for every
+ * word: PostgREST ANDs successive .or() calls together, so this builds
+ * (word1 anywhere) AND (word2 anywhere).
+ */
+function applyListingTextSearch(dbQuery, rawText) {
+    // 'postalCode' is camelCase in this table, unlike every neighbour. Spelling
+    // it postal_code made PostgREST reject the whole query, which returned no
+    // rooms for any search at all rather than merely missing postcode matches.
+    const FIELDS = ['title', 'description', 'city', 'street', 'house_type', 'location', 'postalCode'];
+
+    const words = String(rawText || '')
+        .toLowerCase()
+        // Commas, brackets and quotes are PostgREST's own syntax inside or(),
+        // and an address is full of commas, so they are separators here rather
+        // than something to escape.
+        .split(/[\s,()"'*%]+/)
+        .map(w => w.trim())
+        .filter(w => w.length >= 2)
+        // A handful of words that appear in almost every listing and only widen
+        // the result set.
+        .filter(w => !['the', 'and', 'for', 'with', 'near', 'in', 'at', 'a', 'an'].includes(w))
+        // Bounded: each word is another AND, and a pasted paragraph should not
+        // become a fifty-clause query.
+        .slice(0, 6);
+
+    if (!words.length) return dbQuery;
+
+    for (const word of words) {
+        dbQuery = dbQuery.or(FIELDS.map(f => `${f}.ilike.%${word}%`).join(','));
+    }
+    return dbQuery;
+}
+
+function transformListingForAndroid(listing, verificationMap = {}) {
+    // Every photo, not just the first.
+    //
+    // Only imageUrl went out, so the apps could never show more than one photo
+    // of a room however many were uploaded — no swiping, no gallery, nothing.
+    // media holds two shapes: plain URL strings from the app, { url } objects
+    // from the website.
+    const imageUrls = (listing.media || [])
+        .map((entry) => {
+            if (typeof entry === 'string') return entry;
+            if (entry && typeof entry === 'object') return entry.url || entry.data || null;
+            return null;
+        })
+        .filter((url) => typeof url === 'string' && url.length > 0);
+
+    const imageUrl = imageUrls[0] || null;
 
     // Check if the lister is verified
     const userEmail = listing.user_email || listing.userEmail;
-    const isVerified = userEmail ? (verificationMap[userEmail] === 'approved') : false;
+    // 'verified' is what approving actually writes. This looked for 'approved',
+    // a status nothing has ever set, so the badge could not appear for anyone.
+    const isVerified = userEmail ? (verificationMap[userEmail] === 'verified') : false;
 
     return {
         id: listing.id,
@@ -982,6 +1740,9 @@ function transformListingForAndroid(listing, verificationMap = {}) {
         bedrooms: listing.bedrooms,
         bathrooms: listing.bathrooms || 1, // Default to 1 if not specified
         imageUrl: imageUrl, // Always a string or null
+        // The full set, so a client can offer a gallery. Kept alongside
+        // imageUrl rather than replacing it, because existing callers read it.
+        imageUrls: imageUrls,
         propertyType: listing.house_type || listing.houseType, // Handle both snake_case and camelCase
         available: true, // Default to available
         createdAt: listing.created_at || listing.createdAt,
@@ -992,6 +1753,319 @@ function transformListingForAndroid(listing, verificationMap = {}) {
 }
 
 // API: Get all listings
+/**
+ * Roommate profiles, for the iOS app.
+ *
+ * The website reads this table straight from Supabase with the anon key. The
+ * app goes through here instead so the key is not shipped inside a binary, and
+ * so the app is not coupled to the table's column names — which have already
+ * been reshaped once.
+ *
+ * `user_type` splits the marketplace in two: 'seeking' is someone looking for
+ * a room, 'has_spot' is someone offering one.
+ */
+app.get('/api/roommate-profiles', async (req, res) => {
+    try {
+        if (!supabase) {
+            return res.status(503).json({ success: false, data: null, message: 'Database not connected' });
+        }
+
+        const { userType, city, maxBudget, q } = req.query;
+
+        // Paged, because this used to take the newest 200 and stop. With more
+        // people than that on the site the rest were unreachable: no search, no
+        // way to page past them, and nothing on screen saying they existed.
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 24, 1), 100);
+        const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+
+        // Blocked people are dropped here rather than by the client. The
+        // browse payload carries no email — on purpose, since sending every
+        // user's address to every visitor so the page could hide one of them
+        // would leak far more than it protects — so the client has nothing to
+        // match a block list against, and its attempt to do so compared a
+        // profile id to an email address and never hid anybody.
+        let blockedUserIds = [];
+        // The viewer's own account ids, so their profile is left out of the
+        // list. Browsing to your own card offers to message, report and block
+        // yourself — the server refuses the message with "that's your own
+        // profile", and the other two are simply nonsense.
+        let selfUserIds = [];
+        const viewerEmail = String(req.query.userEmail || '').trim().toLowerCase();
+        if (viewerEmail) {
+            const { data: me } = await supabase
+                .from('profiles')
+                .select('id, user_id')
+                .ilike('email', viewerEmail);
+            selfUserIds = (me || []).flatMap((row) => [row.id, row.user_id]).filter(Boolean);
+        }
+        if (viewerEmail) {
+            const { data: blocks } = await supabase
+                .from('blocked_users')
+                .select('blocked_email')
+                .eq('blocker_email', viewerEmail);
+
+            const blockedEmails = (blocks || []).map((row) => row.blocked_email).filter(Boolean);
+            if (blockedEmails.length) {
+                const { data: blockedProfiles } = await supabase
+                    .from('profiles')
+                    // Both, because roommate_profiles.user_id points at one or
+                    // the other depending on when the row was written. Taking
+                    // only `id` left half the blocked people still visible.
+                    .select('id, user_id')
+                    .in('email', blockedEmails);
+                blockedUserIds = (blockedProfiles || [])
+                    .flatMap((row) => [row.id, row.user_id])
+                    .filter(Boolean);
+            }
+        }
+
+        let query = supabase
+            .from('roommate_profiles')
+            // count:'exact' so the page can say how many there really are
+            // rather than how many it happened to receive.
+            .select('id, name, user_type, budget_min, budget_max, preferred_areas, move_in_date, bio, avatar_url, room_rent, room_location, room_description, room_photos, created_at',
+                    { count: 'exact' })
+            .eq('is_active', true)
+            .order('created_at', { ascending: false });
+
+        const hiddenUserIds = [...new Set([...blockedUserIds, ...selfUserIds])];
+        if (hiddenUserIds.length) {
+            query = query.not('user_id', 'in', `(${hiddenUserIds.join(',')})`);
+        }
+
+        // A profile with no account behind it cannot be messaged — the
+        // conversation endpoint answers "isn't linked to an account yet" —
+        // and cannot be blocked either, because there is no address to block.
+        // Showing one is offering a person you cannot contact: every tap on
+        // them ends in an error, which reads as the feature being broken
+        // rather than the row being a placeholder.
+        //
+        // Set SHOW_UNLINKED_ROOMMATE_PROFILES=true to put them back.
+        const hideUnlinked = process.env.SHOW_UNLINKED_ROOMMATE_PROFILES !== 'true';
+        let linkedUserIds = null;
+        if (hideUnlinked) {
+            const { data: accounts } = await supabase.from('profiles').select('id, user_id');
+            linkedUserIds = [...new Set((accounts || [])
+                .flatMap((row) => [row.id, row.user_id])
+                .filter(Boolean))];
+            if (linkedUserIds.length) {
+                query = query.in('user_id', linkedUserIds);
+            }
+        }
+
+        if (userType === 'seeking' || userType === 'has_spot') {
+            query = query.eq('user_type', userType);
+        }
+        if (maxBudget) {
+            const ceiling = parseInt(maxBudget, 10);
+            // Matches anyone whose floor is within budget; budget_min is the
+            // least they expect to pay, so a higher floor prices them out.
+            if (!Number.isNaN(ceiling)) query = query.lte('budget_min', ceiling);
+        }
+
+
+
+        // City is matched in code below because it can live in an array column
+        // OR a scalar one, so when a city is given the page has to be taken
+        // after filtering rather than by the database.
+        const cityGiven = !!(city && city.trim());
+        const queryGiven = !!(q && q.trim());
+        // Both of these are matched in code, so both have to take their page
+        // after filtering rather than from the database.
+        const filterInCode = cityGiven || queryGiven;
+
+        if (filterInCode) {
+            // Bounded anyway. Dropping the range here without a cap would ask
+            // for every active profile on the site to filter four dozen out of.
+            query = query.limit(500);
+        } else {
+            query = query.range(offset, offset + limit - 1);
+        }
+
+        const { data, error, count } = await query;
+        if (error) {
+            console.error('Error fetching roommate profiles:', error.message);
+            return res.status(500).json({ success: false, data: null, message: 'Failed to fetch roommate profiles' });
+        }
+
+        let profiles = data || [];
+        let total = count ?? profiles.length;
+
+        // City is matched here rather than in the query: it can live in
+        // preferred_areas (an array) OR room_location, and PostgREST cannot
+        // express that as a single OR across a scalar and an array column.
+        /// Everything about a person that is worth matching text against,
+        /// including preferred_areas — which is a text array, and the field
+        /// most people's city actually lives in. PostgREST cannot ILIKE an
+        /// array, which is why this is done here: searching "toronto" found
+        /// nobody while three profiles listed Toronto.
+        const haystack = (p) => [
+            p.name,
+            p.bio,
+            p.room_location,
+            p.room_description,
+            Array.isArray(p.preferred_areas) ? p.preferred_areas.join(' ') : p.preferred_areas
+        ].filter(Boolean).join(' ').toLowerCase();
+
+        if (cityGiven) {
+            const needle = city.trim().toLowerCase();
+            profiles = profiles.filter((p) => haystack(p).includes(needle));
+        }
+
+        if (queryGiven) {
+            // Every word has to appear somewhere, so "toronto student" narrows
+            // rather than widens.
+            const words = String(q).toLowerCase()
+                .split(/[\s,()"'*%]+/)
+                .filter(w => w.length >= 2)
+                .slice(0, 4);
+            if (words.length) {
+                profiles = profiles.filter((p) => {
+                    const hay = haystack(p);
+                    return words.every(w => hay.includes(w));
+                });
+            }
+        }
+
+        if (filterInCode) {
+            total = profiles.length;
+            profiles = profiles.slice(offset, offset + limit);
+        }
+
+        res.json({
+            success: true,
+            data: profiles,
+            total,
+            offset,
+            limit,
+            // So the page knows whether to offer more rather than guessing from
+            // how full the last batch looked.
+            hasMore: offset + profiles.length < total
+        });
+    } catch (error) {
+        console.error('Roommate profiles endpoint failed:', error);
+        res.status(500).json({ success: false, data: null, message: 'Failed to fetch roommate profiles' });
+    }
+});
+
+/**
+ * Create or replace the signed-in person's roommate profile.
+ *
+ * The website writes these straight to Supabase with the anon key, so this
+ * endpoint never existed and the app could only ever read the marketplace —
+ * you could scroll a hundred strangers and never appear in it yourself.
+ *
+ * Two things it does that a direct insert does not: it links the row to an
+ * account, and it keeps one profile per person. Without the link,
+ * POST /api/roommate-conversations cannot resolve an address and answers
+ * "isn't linked to an account yet" to everyone who tries to message you, which
+ * is a profile that exists only to waste people's time. Without the second, a
+ * person who edits their details three times appears in the list three times.
+ */
+app.post('/api/roommate-profiles', async (req, res) => {
+    try {
+        if (!supabase) {
+            return res.status(503).json({ success: false, message: 'Database not connected' });
+        }
+
+        const email = String(req.body.userEmail || '').trim().toLowerCase();
+        if (!email) {
+            return res.status(400).json({ success: false, message: 'You have to be signed in to post a profile' });
+        }
+
+        const name = String(req.body.name || '').trim();
+        if (!name) {
+            return res.status(400).json({ success: false, message: 'A name is required' });
+        }
+
+        const userType = req.body.userType === 'has_spot' ? 'has_spot' : 'seeking';
+
+        // Upsert rather than select: someone can be signed in on a device
+        // without ever having had a profiles row written for them, and finding
+        // that out at message time is too late.
+        const { data: account, error: accountError } = await supabase
+            .from('profiles')
+            .upsert({ email }, { onConflict: 'email' })
+            .select('id')
+            .single();
+
+        if (accountError || !account?.id) {
+            console.error('Roommate profile: could not resolve account:', accountError?.message);
+            return res.status(500).json({ success: false, message: 'Could not link that profile to your account' });
+        }
+
+        const number = (value) => {
+            const parsed = parseInt(value, 10);
+            return Number.isNaN(parsed) || parsed <= 0 ? null : parsed;
+        };
+        const text = (value) => {
+            const trimmed = String(value ?? '').trim();
+            return trimmed.length ? trimmed : null;
+        };
+        const list = (value) => (Array.isArray(value) ? value.filter((entry) => typeof entry === 'string' && entry.trim()) : []);
+
+        const row = {
+            user_id: account.id,
+            name,
+            user_type: userType,
+            bio: text(req.body.bio),
+            avatar_url: text(req.body.avatarUrl),
+            move_in_date: text(req.body.moveInDate),
+            preferred_areas: list(req.body.preferredAreas),
+            is_active: true
+        };
+
+        // The two sides carry different money and different detail. Writing
+        // both sets would give somebody looking for a room a rent they are
+        // supposedly charging.
+        if (userType === 'has_spot') {
+            row.room_rent = number(req.body.roomRent);
+            row.room_location = text(req.body.roomLocation);
+            row.room_description = text(req.body.roomDescription);
+            row.room_photos = list(req.body.roomPhotos);
+            row.budget_min = null;
+            row.budget_max = null;
+        } else {
+            row.budget_min = number(req.body.budgetMin);
+            row.budget_max = number(req.body.budgetMax);
+            row.room_rent = null;
+            row.room_location = null;
+            row.room_description = null;
+            row.room_photos = [];
+        }
+
+        const { data: existing } = await supabase
+            .from('roommate_profiles')
+            .select('id')
+            .eq('user_id', account.id)
+            .maybeSingle();
+
+        const write = existing?.id
+            ? supabase.from('roommate_profiles').update(row).eq('id', existing.id).select('id').single()
+            : supabase.from('roommate_profiles').insert(row).select('id').single();
+
+        const { data: saved, error } = await write;
+
+        if (error) {
+            console.error('Roommate profile save failed:', error.message);
+            return res.status(500).json({
+                success: false,
+                message: 'Could not save your profile',
+                details: error.message
+            });
+        }
+
+        res.json({
+            success: true,
+            data: { id: saved.id, replaced: !!existing?.id },
+            message: existing?.id ? 'Profile updated' : 'Profile created'
+        });
+    } catch (error) {
+        console.error('Roommate profile endpoint failed:', error);
+        res.status(500).json({ success: false, message: 'Could not save your profile' });
+    }
+});
+
 app.get('/api/listings', async (req, res) => {
     try {
         console.log('🔍 DEBUG /api/listings: Request received');
@@ -1048,27 +2122,8 @@ app.get('/api/listings', async (req, res) => {
         }
 
         // Fetch verification status for all users who have listings
-        let verificationMap = {};
-        try {
-            const userEmails = [...new Set((dbListings || [])
-                .map(l => l.user_email || l.userEmail)
-                .filter(email => email))];
-
-            if (userEmails.length > 0) {
-                const { data: verifications, error: verifyError } = await supabase
-                    .from('user_verifications')
-                    .select('user_email, status')
-                    .in('user_email', userEmails);
-
-                if (!verifyError && verifications) {
-                    verifications.forEach(v => {
-                        verificationMap[v.user_email] = v.status;
-                    });
-                }
-            }
-        } catch (verifyErr) {
-            console.log('Could not fetch verification status:', verifyErr.message);
-        }
+        const verificationMap = await fetchVerificationMap(supabase,
+            (dbListings || []).map(l => l.user_email || l.userEmail));
 
         // Transform listings to match Android model
         const transformedListings = (dbListings || []).map(l => transformListingForAndroid(l, verificationMap));
@@ -1120,21 +2175,8 @@ app.get('/api/listings/search', async (req, res) => {
             }
 
             // Fetch verification status
-            let verificationMap = {};
-            try {
-                const userEmails = [...new Set((dbListings || [])
-                    .map(l => l.user_email || l.userEmail)
-                    .filter(email => email))];
-                if (userEmails.length > 0) {
-                    const { data: verifications } = await supabase
-                        .from('user_verifications')
-                        .select('user_email, status')
-                        .in('user_email', userEmails);
-                    if (verifications) {
-                        verifications.forEach(v => { verificationMap[v.user_email] = v.status; });
-                    }
-                }
-            } catch (e) { /* ignore */ }
+            const verificationMap = await fetchVerificationMap(supabase,
+                (dbListings || []).map(l => l.user_email || l.userEmail));
 
             const transformedListings = (dbListings || []).map(l => transformListingForAndroid(l, verificationMap));
             return res.json({
@@ -1152,7 +2194,7 @@ app.get('/api/listings/search', async (req, res) => {
             .select('*');
             
         // Apply search term filter
-        dbQuery = dbQuery.or(`title.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%,city.ilike.%${searchTerm}%,street.ilike.%${searchTerm}%,house_type.ilike.%${searchTerm}%`);
+        dbQuery = applyListingTextSearch(dbQuery, searchTerm);
         
         // Apply additional filters if provided
         if (min_price && !isNaN(parseFloat(min_price))) {
@@ -1166,7 +2208,10 @@ app.get('/api/listings/search', async (req, res) => {
         }
         if (location && location.trim()) {
             const locationTerm = location.toLowerCase().trim();
-            dbQuery = dbQuery.or(`city.ilike.%${locationTerm}%,street.ilike.%${locationTerm}%`);
+            // Same word-by-word treatment, so "Los Angeles" as a location works.
+            for (const word of String(locationTerm).toLowerCase().split(/[\s,()"'*%]+/).filter(w => w.length >= 2).slice(0, 4)) {
+                dbQuery = dbQuery.or(`city.ilike.%${word}%,street.ilike.%${word}%,postalCode.ilike.%${word}%`);
+            }
         }
         
         dbQuery = dbQuery.order('created_at', { ascending: false });
@@ -1183,21 +2228,8 @@ app.get('/api/listings/search', async (req, res) => {
         }
 
         // Fetch verification status for search results
-        let verificationMap = {};
-        try {
-            const userEmails = [...new Set((dbListings || [])
-                .map(l => l.user_email || l.userEmail)
-                .filter(email => email))];
-            if (userEmails.length > 0) {
-                const { data: verifications } = await supabase
-                    .from('user_verifications')
-                    .select('user_email, status')
-                    .in('user_email', userEmails);
-                if (verifications) {
-                    verifications.forEach(v => { verificationMap[v.user_email] = v.status; });
-                }
-            }
-        } catch (e) { /* ignore */ }
+        const verificationMap = await fetchVerificationMap(supabase,
+            (dbListings || []).map(l => l.user_email || l.userEmail));
 
         const transformedListings = (dbListings || []).map(l => transformListingForAndroid(l, verificationMap));
 
@@ -1440,21 +2472,8 @@ app.post('/api/listings/search', async (req, res) => {
 
         // Helper function to get verification map
         async function getVerificationMap(dbListings) {
-            let verificationMap = {};
-            try {
-                const userEmails = [...new Set((dbListings || [])
-                    .map(l => l.user_email || l.userEmail)
-                    .filter(email => email))];
-                if (userEmails.length > 0) {
-                    const { data: verifications } = await supabase
-                        .from('user_verifications')
-                        .select('user_email, status')
-                        .in('user_email', userEmails);
-                    if (verifications) {
-                        verifications.forEach(v => { verificationMap[v.user_email] = v.status; });
-                    }
-                }
-            } catch (e) { /* ignore */ }
+            const verificationMap = await fetchVerificationMap(supabase,
+                (dbListings || []).map(l => l.user_email || l.userEmail));
             return verificationMap;
         }
 
@@ -1485,12 +2504,12 @@ app.post('/api/listings/search', async (req, res) => {
 
         const searchTerm = query.toLowerCase().trim();
 
-        // Use Supabase full-text search or ILIKE for searching
-        const { data: dbListings, error } = await supabase
-            .from('listings')
-            .select('*')
-            .or(`title.ilike.%${searchTerm}%,description.ilike.%${searchTerm}%,city.ilike.%${searchTerm}%,street.ilike.%${searchTerm}%,house_type.ilike.%${searchTerm}%`)
-            .order('created_at', { ascending: false });
+        // Word by word, same as the other search route. Matching the whole
+        // box against one field at a time meant anything spanning two fields
+        // found nothing.
+        const { data: dbListings, error } = await applyListingTextSearch(
+            supabase.from('listings').select('*'), searchTerm
+        ).order('created_at', { ascending: false });
 
         if (error) {
             console.error('Error searching listings:', error);
@@ -2288,7 +3307,7 @@ Date: ${new Date().toISOString()}
 }
 
 // API: Send verification email
-app.post('/api/send-verification', authRateLimitMiddleware, async (req, res) => {
+async function sendVerificationHandler(req, res) {
     try {
         console.log('📧 Received verification request:', req.body);
         const { firstName, lastName, email, password } = req.body;
@@ -2358,10 +3377,11 @@ app.post('/api/send-verification', authRateLimitMiddleware, async (req, res) => 
         console.error('❌ Error in /api/send-verification:', error.message);
         res.status(500).json({ error: 'Failed to send verification code: ' + error.message });
     }
-});
+}
+app.post('/api/send-verification', authRateLimitMiddleware, sendVerificationHandler);
 
 // API: Verify email code and complete registration
-app.post('/api/verify-email', authRateLimitMiddleware, async (req, res) => {
+async function verifyEmailHandler(req, res) {
     try {
         const { email, code } = req.body;
         
@@ -2395,11 +3415,33 @@ app.post('/api/verify-email', authRateLimitMiddleware, async (req, res) => {
         if (supabase) {
             try {
                 console.log('🔐 Creating Supabase Auth account for:', email);
-                const { data: authData, error: authError } = await supabase.auth.signUp({
+                // Created already-confirmed, with the service-role client.
+                //
+                // auth.signUp leaves the address unconfirmed and waits for the
+                // link Supabase emails. This app never uses that link — it
+                // verifies with its own six-digit code, which has already been
+                // checked by the time execution reaches here — so accounts were
+                // being created that Supabase then refused to sign in, and
+                // every new account was told its credentials were invalid.
+                let { data: authData, error: authError } = await supabase.auth.admin.createUser({
                     email: email,
-                    password: password
+                    password: password,
+                    email_confirm: true
                 });
-                
+
+                // Older deployments may not have service-role access here.
+                // Falling back keeps sign-up working rather than failing shut,
+                // at the cost of the account needing the emailed link.
+                if (authError) {
+                    console.warn('⚠️ admin.createUser failed, falling back to signUp:', authError.message);
+                    const fallback = await supabaseAuth.auth.signUp({
+                        email: email,
+                        password: password
+                    });
+                    authData = fallback.data;
+                    authError = fallback.error;
+                }
+
                 if (authError) {
                     console.error('❌ Supabase Auth signup failed:', authError.message);
                     return res.status(400).json({ error: 'Failed to create authentication account: ' + authError.message });
@@ -2480,7 +3522,8 @@ app.post('/api/verify-email', authRateLimitMiddleware, async (req, res) => {
         console.error('Error in /api/verify-email:', error.message);
         res.status(500).json({ error: 'Failed to verify email and create account' });
     }
-});
+}
+app.post('/api/verify-email', authRateLimitMiddleware, verifyEmailHandler);
 
 // API: User login with Supabase authentication
 app.post('/api/login', authRateLimitMiddleware, async (req, res) => {
@@ -2494,7 +3537,7 @@ app.post('/api/login', authRateLimitMiddleware, async (req, res) => {
         if (supabase) {
             try {
                 console.log('🔍 Attempting Supabase Auth login for:', email);
-                const { data, error } = await supabase.auth.signInWithPassword({
+                const { data, error } = await supabaseAuth.auth.signInWithPassword({
                     email: email,
                     password: password
                 });
@@ -2796,7 +3839,10 @@ app.post('/api/register', async (req, res) => {
         };
         
         // Call the existing send-verification handler
-        await app._router.stack.find(r => r.route && r.route.path === '/api/send-verification').route.stack[0].handle(verificationReq, verificationRes);
+        // Called directly. This used to dig the handler out of app._router,
+        // which Express 5 removed — so every registration threw before it began
+        // and answered "Failed to process registration".
+        await sendVerificationHandler(verificationReq, verificationRes);
         
     } catch (error) {
         console.error('Registration error:', error);
@@ -2832,7 +3878,8 @@ app.post('/api/auth/verify-code', async (req, res) => {
         };
         
         // Call the existing verify-email handler
-        await app._router.stack.find(r => r.route && r.route.path === '/api/verify-email').route.stack[0].handle(verifyReq, verifyRes);
+        // Called directly, for the same reason as the registration route above.
+        await verifyEmailHandler(verifyReq, verifyRes);
         
         if (verifySuccess && userId) {
             // Get the newly created user
@@ -2961,17 +4008,24 @@ app.post('/api/auth/google', async (req, res) => {
 // API: Google OAuth Code Exchange (OAuth 2.0 flow)
 app.post('/api/auth/google/oauth-code', async (req, res) => {
     try {
-        const { code } = req.body;
-        
+        const { code, redirectUri: requestedRedirectUri } = req.body;
+
         if (!code) {
             return res.status(400).json({ error: 'Authorization code is required' });
         }
 
-        // Exchange authorization code for tokens
-        // For popup mode with initCodeClient, Google expects 'postmessage' as redirect_uri
-        // This is a special value for the popup OAuth flow
-        const redirectUri = 'postmessage';
-        
+        // The redirect_uri sent to Google's token endpoint must match the one
+        // the code was issued for:
+        //   'postmessage'  — the website's popup flow (initCodeClient)
+        //   the native URI — the iOS app's ASWebAuthenticationSession flow
+        //
+        // Allowlisted rather than passed through, so this cannot be turned into
+        // a way to redirect codes somewhere we do not control.
+        const ALLOWED_REDIRECT_URIS = ['postmessage', GOOGLE_NATIVE_REDIRECT_URI];
+        const redirectUri = ALLOWED_REDIRECT_URIS.includes(requestedRedirectUri)
+            ? requestedRedirectUri
+            : 'postmessage';
+
         console.log('Redirect URI being used:', redirectUri);
         console.log('Request headers:', {
             origin: req.headers.origin,
@@ -3105,6 +4159,32 @@ app.get('/api/auth/google/callback', (req, res) => {
     res.redirect('/login.html');
 });
 
+// The redirect target for Google sign-in started from the iOS app.
+//
+// Google refuses to run OAuth inside an embedded web view, so the app opens
+// the consent screen in ASWebAuthenticationSession — a real Safari context —
+// which can only hand control back through a registered https redirect. That
+// lands here, and this bounces it into the app's custom scheme.
+//
+// Nothing sensitive is minted here: the authorization code is single-use, is
+// worthless without the client secret the app never sees, and is exchanged by
+// /api/auth/google/oauth-code below.
+
+app.get(GOOGLE_NATIVE_REDIRECT_PATH, (req, res) => {
+    const { code, error, state } = req.query;
+
+    const params = new URLSearchParams();
+    if (error) params.set('error', String(error));
+    if (code) params.set('code', String(code));
+    if (state) params.set('state', String(state));
+
+    res.redirect(`${IOS_APP_SCHEME}://auth/google?${params.toString()}`);
+});
+
+// Native Sign in with Apple issues tokens whose audience is the app's bundle
+// identifier rather than the web Services ID, so both are valid here.
+const APPLE_IOS_BUNDLE_ID = process.env.APPLE_IOS_BUNDLE_ID?.trim() || 'com.roomfinderai.app';
+
 // API: Apple OAuth Sign-In
 app.post('/api/auth/apple', async (req, res) => {
     try {
@@ -3114,17 +4194,21 @@ app.post('/api/auth/apple', async (req, res) => {
             return res.status(400).json({ error: 'Apple identity token is required' });
         }
 
-        // For demo purposes, we'll decode the JWT without verification
-        // In production, you should verify the JWT signature with Apple's public keys
-        const tokenParts = identityToken.split('.');
-        if (tokenParts.length !== 3) {
-            return res.status(401).json({ error: 'Invalid Apple token format' });
-        }
-
-        const payload = JSON.parse(Buffer.from(tokenParts[1], 'base64').toString());
-        
-        // Verify token is from Apple and not expired
-        if (payload.iss !== 'https://appleid.apple.com' || payload.exp < Date.now() / 1000) {
+        // Signature, issuer, expiry and audience are all checked against
+        // Apple's published keys. The previous version decoded the payload and
+        // trusted it, which meant a hand-written JSON blob claiming any email
+        // address was a valid login for that account.
+        //
+        // Two audiences are accepted: the Services ID used by the website's
+        // JS flow, and the iOS bundle ID used by native Sign in with Apple.
+        let payload;
+        try {
+            payload = await verifyAppleIdentityToken(identityToken, [
+                config.APPLE_CLIENT_ID,
+                APPLE_IOS_BUNDLE_ID
+            ]);
+        } catch (verifyError) {
+            console.warn('Apple identity token rejected:', verifyError.message);
             return res.status(401).json({ error: 'Invalid or expired Apple token' });
         }
 
@@ -3733,7 +4817,7 @@ app.post('/api/send-reset-code', authRateLimitMiddleware, async (req, res) => {
         console.log('📧 Received password reset request for:', req.body.email);
         const { email, turnstileToken } = req.body;
 
-        const turnstile = await verifyTurnstileToken(turnstileToken);
+        const turnstile = await verifyTurnstileToken(turnstileToken, req);
         if (!turnstile.ok) {
             return res.status(400).json({ error: turnstile.error || 'Bot verification failed' });
         }
@@ -3785,8 +4869,8 @@ app.post('/api/send-reset-code', authRateLimitMiddleware, async (req, res) => {
             });
         }
 
-        // Generate reset code
-        const code = generateVerificationCode();
+        // Derived rather than random, so a restart cannot orphan it.
+        const code = derivedResetCode(email);
         const sessionId = uuidv4();
         const expirationTime = Date.now() + 10 * 60 * 1000; // 10 minutes
 
@@ -3823,6 +4907,52 @@ app.post('/api/send-reset-code', authRateLimitMiddleware, async (req, res) => {
     }
 });
 
+
+/**
+ * A reset code that survives a restart.
+ *
+ * The codes were held in a Map in memory, so every deploy, crash or restart
+ * silently threw away every reset in progress: the code in someone's inbox was
+ * real when it was sent and answered "No reset code found for this email" a
+ * minute later, with nothing on screen explaining why. Railway running more
+ * than one instance broke it the same way, since the server that issued a code
+ * was rarely the one asked to check it.
+ *
+ * Deriving the code from the address and a ten minute window makes it
+ * checkable by any instance at any time, with no table to add. The Map is kept
+ * as the fast path so a code is still consumed on use in the normal case; this
+ * is only what answers when the Map has nothing to say.
+ */
+const RESET_CODE_WINDOW_MS = 10 * 60 * 1000;
+
+function resetCodeSecret() {
+    return process.env.RESET_CODE_SECRET?.trim()
+        || config.SUPABASE_SERVICE_KEY
+        || config.SUPABASE_KEY
+        || 'roomfinder-reset-fallback';
+}
+
+function derivedResetCode(email, windowOffset = 0) {
+    const windowIndex = Math.floor(Date.now() / RESET_CODE_WINDOW_MS) + windowOffset;
+    const digest = crypto
+        .createHmac('sha256', resetCodeSecret())
+        .update(`${String(email).toLowerCase()}:${windowIndex}`)
+        .digest();
+    // Six digits, from the first four bytes so the whole range is used.
+    return String(digest.readUInt32BE(0) % 1000000).padStart(6, '0');
+}
+
+/**
+ * True when the code is one this server would have issued for that address
+ * recently. The previous window is accepted too, so a code that arrives at
+ * 10:59 and is typed at 11:01 still works.
+ */
+function isDerivedResetCode(email, code) {
+    if (!email || !code) return false;
+    const given = String(code).trim();
+    return given === derivedResetCode(email, 0) || given === derivedResetCode(email, -1);
+}
+
 // API: Verify password reset code
 app.post('/api/verify-reset-code', authRateLimitMiddleware, async (req, res) => {
     try {
@@ -3834,9 +4964,20 @@ app.post('/api/verify-reset-code', authRateLimitMiddleware, async (req, res) => 
 
         // Get stored reset data
         const resetData = passwordResetCodes.get(email);
-        
+
         if (!resetData) {
-            return res.status(400).json({ error: 'No reset code found for this email' });
+            // The server restarted between sending the code and checking it.
+            // The code itself is still proof the person reads that inbox.
+            if (!isDerivedResetCode(email, code)) {
+                return res.status(400).json({ error: 'That code is wrong or has expired. Ask for a new one.' });
+            }
+            passwordResetCodes.set(email, {
+                code: String(code).trim(),
+                sessionId,
+                expirationTime: Date.now() + 10 * 60 * 1000,
+                verified: true
+            });
+            return res.json({ message: 'Code verified successfully', sessionId });
         }
 
         // Check session ID
@@ -3883,13 +5024,15 @@ app.post('/api/reset-password', async (req, res) => {
 
         // Get stored reset data
         const resetData = passwordResetCodes.get(email);
-        
-        if (!resetData || !resetData.verified) {
-            return res.status(400).json({ error: 'Invalid or unverified reset request' });
-        }
 
-        // Verify session and code again
-        if (resetData.sessionId !== sessionId || resetData.code !== code) {
+        if (!resetData || !resetData.verified) {
+            // Restarted mid-flow again. The code is checked from scratch rather
+            // than sending someone back to the start of a reset they already
+            // completed the hard part of.
+            if (!isDerivedResetCode(email, code)) {
+                return res.status(400).json({ error: 'That code is wrong or has expired. Ask for a new one.' });
+            }
+        } else if (resetData.sessionId !== sessionId || resetData.code !== code) {
             return res.status(400).json({ error: 'Invalid reset credentials' });
         }
 
@@ -4255,18 +5398,140 @@ app.get('/api/brevo-status', blockInProduction, async (req, res) => {
  * Analyzes a property photo using Cloudflare Workers AI (LLaVA)
  * FREE: 10,000 neurons/day
  */
+/**
+ * A place name for a pair of coordinates, for the photo analyser.
+ *
+ * The same Nominatim lookup /api/reverse-geocode exposes, factored out so the
+ * photo endpoint can use it directly instead of the app making a second round
+ * trip. Returns null rather than throwing: a photo with no usable GPS is the
+ * normal case, not an error, and the analysis still runs without it.
+ */
+async function addressFromCoords(lat, lng) {
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
+
+    try {
+        const url = `https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&addressdetails=1`;
+        const response = await axios.get(url, {
+            headers: { 'User-Agent': 'RoomFinderAI/1.0 (property listing app)' },
+            timeout: 8000
+        });
+
+        const address = response.data?.address;
+        if (!address) return null;
+
+        const streetParts = [address.house_number, address.road].filter(Boolean);
+        return {
+            street: streetParts.length ? streetParts.join(' ') : null,
+            city: address.city || address.town || address.village || address.suburb || null,
+            state: address.state || null,
+            zip: address.postcode || null,
+            country: address.country || null
+        };
+    } catch (error) {
+        // Nominatim rate-limits and occasionally times out. Losing the address
+        // must not lose the whole analysis.
+        console.warn('📍 Reverse geocode failed:', error.message);
+        return null;
+    }
+}
+
+/**
+ * A rough position from the caller's IP address, as a last resort.
+ *
+ * Used only when a photo carried no GPS and the person declined the location
+ * prompt. It resolves to a city and postcode, never a street: an IP address
+ * simply does not carry one, and inventing a street would put a real
+ * stranger's home on a live listing. Whatever comes back is marked
+ * `source: 'ip'` so the app can present it as approximate and let the host
+ * correct it.
+ *
+ * ip-api.com is free and needs no key. Their free tier is non-commercial, so
+ * this is worth revisiting if it ever runs at volume.
+ */
+async function addressFromIP(req) {
+    try {
+        // Railway sits behind a proxy, so the socket address is the proxy's.
+        const forwarded = String(req.headers['x-forwarded-for'] || '').split(',')[0].trim();
+        const ip = forwarded || req.socket?.remoteAddress || '';
+
+        // Anything local tells us nothing about where the user is.
+        if (!ip || ip.startsWith('127.') || ip.startsWith('10.') || ip.startsWith('192.168.') || ip === '::1') {
+            return null;
+        }
+
+        const response = await axios.get(
+            `http://ip-api.com/json/${encodeURIComponent(ip)}?fields=status,city,regionName,zip,country`,
+            { timeout: 5000 }
+        );
+
+        const data = response.data;
+        if (!data || data.status !== 'success' || !data.city) return null;
+
+        return {
+            street: null,          // an IP cannot know this
+            city: data.city,
+            state: data.regionName || null,
+            zip: data.zip || null,
+            country: data.country || null,
+            source: 'ip',
+            approximate: true
+        };
+    } catch (error) {
+        console.warn('📍 IP geolocation failed:', error.message);
+        return null;
+    }
+}
+
 app.post('/api/analyze-property-photo', async (req, res) => {
     console.log('🖼️ Property photo analysis endpoint called');
 
     try {
-        const { image, location } = req.body;
+        const { imageBase64, coords } = req.body || {};
+        let { image, location } = req.body || {};
 
-        if (!image || !Array.isArray(image)) {
+        // Accept base64 as well as an array of bytes.
+        //
+        // The array form makes a client allocate one boxed number per byte and
+        // send roughly half a megabyte of JSON for a 90KB photo. The iOS app
+        // spent minutes encoding that while this endpoint answered in about a
+        // second. Base64 is one compact string; the array form still works, so
+        // nothing that already calls this breaks.
+        if (!image && typeof imageBase64 === 'string' && imageBase64.length) {
+            try {
+                image = Array.from(Buffer.from(imageBase64, 'base64'));
+            } catch (decodeError) {
+                console.log('❌ imageBase64 was not valid base64');
+                return res.status(400).json({ success: false, error: 'Invalid image data.' });
+            }
+        }
+
+        if (!image || !Array.isArray(image) || image.length === 0) {
             console.log('❌ Invalid image data received');
             return res.status(400).json({
                 success: false,
-                error: 'Invalid image data. Expected base64-encoded image as array of bytes.'
+                error: 'Invalid image data. Send imageBase64 as a base64 string, or image as an array of bytes.'
             });
+        }
+
+        // Coordinates out of the photo's own metadata. Turned into a place name
+        // here rather than in the app, so the address lookup and its API key
+        // stay server-side.
+        if (!location && coords && Number.isFinite(coords.lat) && Number.isFinite(coords.lng)) {
+            location = await addressFromCoords(coords.lat, coords.lng);
+            if (location) {
+                console.log(`📍 Resolved photo GPS to ${location.city || '?'} ${location.zip || ''}`);
+            }
+        }
+
+        // Still nothing: no GPS in the photo and the location prompt declined.
+        // The IP gets the city and postcode, which is most of the address and
+        // beats an empty form. The street stays blank for the host to type.
+        if (!location) {
+            location = await addressFromIP(req);
+            if (location) {
+                console.log(`📍 Approximate location from IP: ${location.city} ${location.zip || ''}`);
+            }
         }
 
         console.log(`📸 Image received: ${image.length} bytes`);
@@ -4283,6 +5548,28 @@ app.post('/api/analyze-property-photo', async (req, res) => {
                 success: false,
                 error: 'AI vision service not configured. Contact support.'
             });
+        }
+
+        // Look at the photo before generating from it - but no longer refuse.
+        //
+        // This used to return 422 and produce nothing when the picture was not
+        // a property, because an earlier version judged the generated text
+        // instead of the image and a logo came back as a two-bedroom house in
+        // Los Angeles. Refusing outright solved that and created a worse
+        // problem: a host who photographs the street, the building from across
+        // the road, or their own front door at a bad angle gets a dead end on
+        // the one step this app exists for, with nothing filled in at all.
+        //
+        // So the verdict is kept and reported rather than enforced. The draft
+        // is always produced from whatever can be read, and the response says
+        // plainly when the photo did not help so the client can tell the host
+        // to check the details rather than presenting guesses as fact. The
+        // honest failure mode is "we filled this in, please correct it", not
+        // "we refuse" and not a confident invention.
+        const verdict = await validatePropertyPhoto(Buffer.from(image), config);
+        const photoUnclear = Boolean(verdict.checked && !verdict.isProperty);
+        if (photoUnclear) {
+            console.log('⚠️ Photo does not look like a property, drafting anyway:', verdict.reason);
         }
 
         console.log(`🔗 Calling Cloudflare Worker: ${workerUrl}`);
@@ -4304,35 +5591,13 @@ app.post('/api/analyze-property-photo', async (req, res) => {
         console.log('📊 Analysis result:', JSON.stringify(workerResponse.data).substring(0, 200) + '...');
 
         const workerData = workerResponse.data;
-        const analysisPayload = workerData.analysis || workerData;
-
-        // Reject obvious non-property uploads (memes, food, random images) before returning listing details.
-        const aiStatus = getAIStatus(config);
-        if (aiStatus.available.length && !DEMO_MODE) {
-            try {
-                const validateResult = await callAI(config, {
-                    messages: [{
-                        role: 'system',
-                        content: `You validate property photo analysis. The vision model analyzed an uploaded image and returned:\n${JSON.stringify(analysisPayload).slice(0, 2500)}\n\nWas the uploaded image likely a real rental property photo (room, apartment, house interior or exterior)? Or was it clearly NOT a property (food, meme, selfie, pet, blank, screenshot, random object)?\nReply JSON only: {"isPropertyPhoto":true|false,"reason":"one sentence"}`
-                    }],
-                    maxTokens: 120,
-                    temperature: 0.1
-                });
-                const jsonMatch = validateResult.content && validateResult.content.match(/\{[\s\S]*\}/);
-                if (jsonMatch) {
-                    const verdict = JSON.parse(jsonMatch[0]);
-                    if (verdict.isPropertyPhoto === false) {
-                        return res.status(422).json({
-                            success: false,
-                            rejected: true,
-                            error: verdict.reason || 'This image does not appear to be a property photo. Please upload a photo of the rental unit.'
-                        });
-                    }
-                }
-            } catch (validateErr) {
-                console.warn('Photo validation skipped (non-fatal):', validateErr.message);
-            }
+        // Carried through so the app can caveat the draft instead of hiding it.
+        if (photoUnclear && workerData && typeof workerData === 'object') {
+            workerData.photoUnclear = true;
+            workerData.photoNote = verdict.reason
+                || 'That photo was hard to read, so these details are a guess. Please check them.';
         }
+        const analysisPayload = workerData.analysis || workerData;
 
         res.json(workerData);
 
@@ -4755,7 +6020,7 @@ app.post('/api/ai-negotiate', openAiRateLimitMiddleware, async (req, res) => {
 
         console.log('✅ AI negotiation assistant response generated successfully');
         res.json({
-            response: aiResponse,
+            response: withoutEmDashes(aiResponse),
             tokensUsed,
             provider: aiResult.provider
         });
@@ -4952,11 +6217,36 @@ Fill criteria from the conversation. intent: "search", "negotiate", or "chat".`;
         if (chatMode === 'rental') {
             const criteriaMatch = fullResponse.match(/###CRITERIA###(.+?)###END###/s);
             if (criteriaMatch) {
+                // Strip the block first, unconditionally.
+                //
+                // This used to happen inside the try, after the parse. When the
+                // model wrote "price":$3900 — invalid JSON because of the
+                // dollar sign — the parse threw and the raw
+                // ###CRITERIA###...###END### was left sitting in the reply the
+                // user reads. Whether we can understand the block has nothing
+                // to do with whether it should be shown to anyone.
+                aiResponse = fullResponse.replace(/###CRITERIA###.+?###END###/s, '').trim();
+
+                // A model that answered with nothing but the criteria block
+                // leaves an empty string here, which the clients render as a
+                // blank bubble. Say something rather than nothing.
+                if (!aiResponse) {
+                    aiResponse = "Sorry, I lost my train of thought there. Could you say that again?";
+                }
+
+                // Then repair the usual ways a language model breaks JSON while
+                // writing about money: a currency symbol before the number,
+                // thousands separators inside it, a trailing comma.
+                const repaired = criteriaMatch[1]
+                    .replace(/:\s*\$\s*/g, ': ')
+                    .replace(/(\d),(\d{3})\b/g, '$1$2')
+                    .replace(/,(\s*[}\]])/g, '$1')
+                    .trim();
+
                 try {
-                    extractedCriteria = JSON.parse(criteriaMatch[1]);
-                    aiResponse = fullResponse.replace(/###CRITERIA###.+?###END###/s, '').trim();
+                    extractedCriteria = JSON.parse(repaired);
                 } catch (e) {
-                    console.log('⚠️ Could not parse criteria JSON:', e.message);
+                    console.log('⚠️ Could not parse criteria JSON:', e.message, '|', repaired.slice(0, 120));
                 }
             }
             if (tenantGoals?.monthly_budget && !extractedCriteria.price) {
@@ -4977,7 +6267,7 @@ Fill criteria from the conversation. intent: "search", "negotiate", or "chat".`;
         }
 
         res.json({
-            response: aiResponse,
+            response: withoutEmDashes(aiResponse),
             criteria: extractedCriteria,
             tokensUsed: result.tokensUsed || 0,
             provider: result.provider,
@@ -5142,7 +6432,13 @@ CRITICAL PERSONALITY RULES - FOLLOW EXACTLY:
 - NEVER use overly formal language like "I am writing to express", "Please be advised", "Kind regards"
 - Sound like you're texting a potential landlord, not writing an essay
 
-YOUR PERSONA: Working professional with stable income, reliable, responsible. Been renting for years, always paid on time, landlords love you. Looking for a quality place.`;
+YOUR PERSONA: Working professional with stable income, reliable, responsible. Been renting for years, always paid on time, landlords love you. Looking for a quality place.
+
+ANSWERING QUESTIONS ABOUT YOURSELF - HARD RULES:
+- The landlord may ask about YOUR plans (move-in date, budget, lease length, who's living there). These are YOUR facts. NEVER turn such a question back on the landlord, and never ask them to tell you what your own timeframe/budget/plans are. Bouncing the question back makes you look like a bot.
+- If a detail about you is not stated in this prompt, you do NOT have a fixed one. Answer with a real, committal-but-flexible reply and move the conversation forward. For move-in: "I'm flexible — could move in as soon as it's available, or whenever suits you." For lease length: "I'm open, whatever's standard for you."
+- NEVER write vague filler like "my move-in timeframe", "my timeline", or "[timeframe]" as if it were a specific value. Either name a real date given to you above, or say you're flexible.
+- Never repeat a question the landlord has already answered, and never re-ask something you asked in a previous message.`;
 
     const phasePrompts = {
         INTRODUCTION: `${basePersonality}
@@ -5256,12 +6552,12 @@ ${(!context.currentOffer && !context.landlordCounterOffer) ? `- HARDEST RULE (hi
 ${availableDaysHint ? `- HARD RULE: If the landlord proposes a meeting day NOT in [${availableDaysHint}], politely counter with a day that IS in that list. NEVER say "works for me" or "sounds good" to any other day.
 - If suggesting a meeting yourself, name a day from [${availableDaysHint}] — never any other day.` : '- Maybe suggest meeting to see the place'}
 - Respond naturally to their message
-- Mention when you'd want to move in
+- ${goals.movein_date ? `Mention you'd want to move in around ${goals.movein_date}` : `If move-in timing comes up, say you're flexible and could move as soon as it's available — never ask THEM what your timeframe is`}
 - Ask about lease length if relevant${leaseHint ? ` (you'd prefer ${leaseHint})` : ''}
 - Show flexibility where you can${availableDaysHint ? ' EXCEPT on which day you meet' : ''}
 
 EXAMPLE THINGS TO SAY:
-- "I'm looking to move by ${goals.movein_date || '[timeframe]'}, would that work?"
+- ${goals.movein_date ? `"I'm looking to move by ${goals.movein_date}, would that work?"` : `"I'm flexible on timing — could move in as soon as it's available, whatever works for you."`}
 - ${leaseHint ? `"I was hoping for a ${leaseHint} lease - is that something you'd consider?"` : '"Is the 12-month lease firm or would you consider longer?"'}
 - ${availableDaysHint ? `"Would love to see the place — could we do ${availableDaysHint.split('/')[0]}?"` : '"Would love to see the place in person if you\'re free sometime"'}
 
@@ -5452,10 +6748,35 @@ async function callOpenAI({ messages, model = 'gpt-4', maxTokens = 300, temperat
 // ========================================
 // OPENAI RATE LIMITING SYSTEM
 // ========================================
-const openAiRateLimitStore = new Map();
+const openAiRateLimitStore = new Map();   // still used by the older per-IP guards
 const OPENAI_HOURLY_LIMIT = 100;
 const OPENAI_DAILY_LIMIT = 500;
-const FREE_AI_MONTHLY_LIMIT = 20;
+
+/** What one free account may send in a day, and what the service may spend in
+ *  a month. The daily figure is the one that stops a single person emptying the
+ *  monthly budget in an afternoon; the service figure is the worst case for the
+ *  OpenAI bill. Both are overridable from the environment. */
+const AI_DAILY_LIMIT = Number(process.env.AI_DAILY_LIMIT) || 25;
+const AI_SERVICE_MONTHLY_LIMIT = Number(process.env.AI_SERVICE_MONTHLY_LIMIT) || 20000;
+// Counted per request, despite the name. One back and forth with the
+// negotiator is six or eight of these, so twenty meant a free account got two
+// conversations a month and then met an upgrade prompt. The hourly and daily
+// ceilings above are what actually protect the spend.
+const FREE_AI_MONTHLY_LIMIT = Number(process.env.FREE_AI_MONTHLY_LIMIT) || 200;
+
+/**
+ * Accounts that skip the free-plan ceiling without being marked Pro.
+ *
+ * For our own testing accounts, so demoing the negotiator does not burn a real
+ * plan limit. Set AI_UNLIMITED_EMAILS to a comma separated list; kept in the
+ * environment rather than in the repo so the addresses are not published.
+ */
+const AI_UNLIMITED_EMAILS = new Set(
+    (process.env.AI_UNLIMITED_EMAILS || '')
+        .split(',')
+        .map((entry) => entry.trim().toLowerCase())
+        .filter(Boolean)
+);
 
 function getHourKey() {
     const now = new Date();
@@ -5481,59 +6802,160 @@ async function isUserProByEmail(email) {
     }
 }
 
+/**
+ * Per-person ceilings on AI use, and one ceiling over the whole service.
+ *
+ * Counts live in the `ai_usage` table rather than in memory. They used to sit
+ * in a Map, which meant every deploy handed everybody a fresh allowance — on a
+ * platform that redeploys on each push, the limits were close to decorative and
+ * the spend they were meant to cap was not actually capped.
+ *
+ * Three windows per person (day, month) plus a service-wide monthly ceiling, so
+ * one account cannot burn a month of budget in an afternoon and the total bill
+ * has a known worst case.
+ */
+async function bumpUsage(userKey, kind, windowStart) {
+    if (!supabase) return 0;
+
+    const { data: existing } = await supabase
+        .from('ai_usage')
+        .select('id, calls')
+        .eq('user_key', userKey)
+        .eq('window_kind', kind)
+        .eq('window_start', windowStart)
+        .maybeSingle();
+
+    if (existing) {
+        await supabase.from('ai_usage')
+            .update({ calls: existing.calls + 1, updated_at: new Date().toISOString() })
+            .eq('id', existing.id);
+        return existing.calls + 1;
+    }
+
+    await supabase.from('ai_usage').insert({
+        user_key: userKey, window_kind: kind, window_start: windowStart, calls: 1
+    });
+    return 1;
+}
+
+async function readUsage(userKey, kind, windowStart) {
+    if (!supabase) return 0;
+    const { data } = await supabase
+        .from('ai_usage')
+        .select('calls')
+        .eq('user_key', userKey)
+        .eq('window_kind', kind)
+        .eq('window_start', windowStart)
+        .maybeSingle();
+    return data?.calls || 0;
+}
+
+const isoDay = (date) => date.toISOString().slice(0, 10);
+
 function openAiRateLimitMiddleware(req, res, next) {
     (async () => {
         const userEmail = req.body?.userEmail || req.headers['user-email'];
-        const isPro = userEmail ? await isUserProByEmail(userEmail) : false;
+        const allowlisted = !!userEmail && AI_UNLIMITED_EMAILS.has(String(userEmail).toLowerCase());
+
+        // Someone who subscribed on the website gets what they paid for
+        // wherever they sign in, the app included.
+        //
+        // What App Store guideline 3.1.1 forbids is selling digital content
+        // inside the app without In-App Purchase, and steering people to buy
+        // elsewhere. It does not forbid an existing account carrying its own
+        // entitlements — a free app that signs somebody into an account they
+        // already hold is the ordinary companion-app arrangement. So the app
+        // contains no purchasing, no prices and no mention of buying anywhere,
+        // and this line simply honours what the account already has.
+        //
+        // The header is still read: it decides the wording when a free user
+        // runs out, which must not invite them to go and buy something.
+        const fromApp = String(req.headers['x-roomfinder-client'] || '').toLowerCase() === 'ios';
+        // Held off until the review of 1.0 (22) is decided.
+        //
+        // Honouring a website subscription here is allowed — a free app with no
+        // purchasing and no mention of buying, signing somebody into an account
+        // they already hold, is the ordinary companion arrangement. But the
+        // reply already sent to App Review states plainly that nothing bought
+        // elsewhere unlocks anything in the app, and that submission can no
+        // longer be replied to. Turning it on now would make a statement Apple
+        // is reading while they review the build untrue. It goes back on in
+        // 1.1, described accurately in that submission's notes.
+        const isPro = allowlisted || (!fromApp && userEmail ? await isUserProByEmail(userEmail) : false);
 
         if (isPro) {
             req.aiRateLimitInfo = { isPro: true, unlimited: true };
             return next();
         }
 
-        const userId = userEmail || getUserId(req);
-        const monthKey = getCurrentMonthKey();
-        const sessionKey = `ai-monthly-${userId}-${monthKey}`;
-        const monthlyUsage = openAiRateLimitStore.get(sessionKey) || 0;
+        const now = new Date();
+        const today = isoDay(now);
+        const monthStart = isoDay(new Date(now.getFullYear(), now.getMonth(), 1));
 
-        if (monthlyUsage >= FREE_AI_MONTHLY_LIMIT) {
+        const tomorrow = new Date(now); tomorrow.setDate(now.getDate() + 1); tomorrow.setHours(0, 0, 0, 0);
+        const nextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+
+        // The whole service first: if the bill ceiling is hit, nobody gets a
+        // call, however much of their own allowance is left.
+        const serviceCalls = await readUsage('__service__', 'month', monthStart);
+        if (serviceCalls >= AI_SERVICE_MONTHLY_LIMIT) {
             return res.status(429).json({
-                error: 'Monthly AI session limit reached',
-                message: `Free plan includes ${FREE_AI_MONTHLY_LIMIT} AI sessions per month. Upgrade to Pro for unlimited access.`,
-                limit: FREE_AI_MONTHLY_LIMIT,
-                used: monthlyUsage,
-                upgradeUrl: '/pricing.html',
+                error: 'Service busy',
+                message: `The AI assistant is at capacity for this month. It comes back on ${nextMonth.toLocaleDateString('en-CA', { day: 'numeric', month: 'long' })}.`,
+                retryAfter: nextMonth.toISOString(),
                 isPro: false
             });
         }
 
-        const hourKey = `openai-hour-${userId}-${getHourKey()}`;
-        const dayKey = `openai-day-${userId}-${getDayKey()}`;
-        const hourlyUsage = openAiRateLimitStore.get(hourKey) || 0;
-        const dailyUsage = openAiRateLimitStore.get(dayKey) || 0;
+        const userId = String(userEmail || getUserId(req)).toLowerCase();
+        const dayCalls = await readUsage(userId, 'day', today);
+        const monthCalls = await readUsage(userId, 'month', monthStart);
 
-        if (hourlyUsage >= OPENAI_HOURLY_LIMIT) {
+        if (dayCalls >= AI_DAILY_LIMIT) {
             return res.status(429).json({
-                error: 'Rate limit exceeded',
-                message: `Maximum ${OPENAI_HOURLY_LIMIT} AI requests per hour. Please wait before trying again.`,
-                retryAfter: 'next hour'
+                error: 'Daily limit reached',
+                message: `You've used all ${AI_DAILY_LIMIT} of today's AI messages. You get another ${AI_DAILY_LIMIT} tomorrow.`,
+                limit: AI_DAILY_LIMIT,
+                used: dayCalls,
+                resetsAt: tomorrow.toISOString(),
+                isPro: false
             });
         }
 
-        if (dailyUsage >= OPENAI_DAILY_LIMIT) {
+        if (monthCalls >= FREE_AI_MONTHLY_LIMIT) {
+            // The app is told the limit and when it lifts, and nothing else.
+            // The website's wording invites the reader to upgrade and links to
+            // the pricing page; inside an iOS app that is steering someone to
+            // buy outside the App Store, which Apple does not allow.
             return res.status(429).json({
-                error: 'Daily rate limit exceeded',
-                message: `Maximum ${OPENAI_DAILY_LIMIT} AI requests per day. Limit resets at midnight.`,
-                retryAfter: 'tomorrow'
+                error: 'Monthly limit reached',
+                message: fromApp
+                    ? `You've used all ${FREE_AI_MONTHLY_LIMIT} of this month's AI messages. They reset on ${nextMonth.toLocaleDateString('en-CA', { day: 'numeric', month: 'long' })}.`
+                    : `Free plan includes ${FREE_AI_MONTHLY_LIMIT} AI messages a month. Upgrade to Pro for unlimited access.`,
+                limit: FREE_AI_MONTHLY_LIMIT,
+                used: monthCalls,
+                resetsAt: nextMonth.toISOString(),
+                ...(fromApp ? {} : { upgradeUrl: '/pricing.html' }),
+                isPro: false
             });
         }
 
-        openAiRateLimitStore.set(sessionKey, monthlyUsage + 1);
-        openAiRateLimitStore.set(hourKey, hourlyUsage + 1);
-        openAiRateLimitStore.set(dayKey, dailyUsage + 1);
-        req.aiRateLimitInfo = { isPro: false, used: monthlyUsage + 1, limit: FREE_AI_MONTHLY_LIMIT };
+        const [used] = await Promise.all([
+            bumpUsage(userId, 'month', monthStart),
+            bumpUsage(userId, 'day', today),
+            bumpUsage('__service__', 'month', monthStart)
+        ]);
+
+        req.aiRateLimitInfo = {
+            isPro: false,
+            used,
+            limit: FREE_AI_MONTHLY_LIMIT,
+            dailyUsed: dayCalls + 1,
+            dailyLimit: AI_DAILY_LIMIT
+        };
         next();
     })().catch((err) => {
+        // Never lock people out because the counter failed.
         console.error('AI rate limit error:', err);
         next();
     });
@@ -5663,6 +7085,17 @@ function buildPhaseLockedSystemPrompt({ phase, tone, facts, alreadyAsked, alread
     // the AI doesn't accidentally agree to a meeting day the tenant flagged
     // unavailable, or to a price above the tenant's stated target.
     const goalRules = [];
+    // Vague self-reference ban. This prompt builder feeds the opening message,
+    // which kept going out as "Is the place still available for my move-in
+    // timeframe?" — naming no timeframe at all. When the landlord then asked
+    // "what is the timeframe", the AI had nothing and bounced the question back
+    // at them, forever. Either state a real date or say you're flexible.
+    goalRules.push(
+        tenantGoals && tenantGoals.movein_date
+            ? `- Your move-in date is ${sanitizeForPrompt(tenantGoals.movein_date, 30)}. State it plainly when timing comes up.`
+            : `- You have NO fixed move-in date. Say you're flexible and can move in as soon as it's available. NEVER write "my move-in timeframe", "my timeframe" or "my timeline" — those name nothing.`
+    );
+    goalRules.push('- Questions about YOUR plans (move-in, budget, job, lease) are yours to answer. NEVER ask the landlord to tell you your own timeframe, budget or plans — bouncing the question back reads as a bot.');
     if (tenantGoals && Array.isArray(tenantGoals.available_days) && tenantGoals.available_days.length) {
         goalRules.push(`- If the landlord proposes a meeting day NOT in [${tenantGoals.available_days.join(', ')}], politely counter-propose one that is — do not agree.`);
     }
@@ -6123,6 +7556,622 @@ app.post('/api/negotiate/counter-offer', openAiRateLimitMiddleware, async (req, 
     } catch (error) {
         console.error('Error in /api/negotiate/counter-offer:', error.message);
         res.status(500).json({ error: 'Failed to generate counter-offer', details: error.message });
+    }
+});
+
+// POST /api/negotiate/judge - LLM situation assessment for the negotiator.
+//
+// WHY THIS EXISTS: phase detection used to be keyword regexes, and regexes
+// cannot read intent. The live failure: our own outgoing question contained
+// "…the timeframe that works for you", CLOSING_SIGNALS_RE matched "that works",
+// and the engine jumped to the terminal CLOSING phase — skipping both
+// negotiating phases and later "agreeing" to $5,000 on a $3,675 listing.
+//
+// DIVISION OF LABOUR (deliberate):
+//   - The MODEL judges the fuzzy stuff: what did the landlord mean, did they
+//     make an offer, are they hostile, did they actually agree, what did they
+//     ask that we still owe an answer to.
+//   - The CALLER enforces policy with the tenant's own numbers: budget
+//     ceiling, asking price, available days. The model is never asked whether
+//     a price is acceptable — that is arithmetic, not judgement, and letting
+//     the model decide it is how you end up above asking.
+//
+// Returns strict JSON. On any model/parse failure it returns a conservative
+// assessment (no agreement, no price, keep negotiating) rather than throwing,
+// because "unsure" must never read as "deal closed".
+app.post('/api/negotiate/judge', openAiRateLimitMiddleware, async (req, res) => {
+    try {
+        const { messageHistory, lastLandlordMessage, listing, tenantParams } = req.body || {};
+
+        const askingPrice = Number(listing?.price) || null;
+        const budget = Number(tenantParams?.monthly_budget) || null;
+
+        const transcript = (Array.isArray(messageHistory) ? messageHistory : [])
+            .slice(-14)
+            .map(m => {
+                const who = (m?.sender === 'ai' || m?.sender === 'assistant') ? 'TENANT(us)' : 'LANDLORD';
+                return `${who}: ${sanitizeForPrompt(String(m?.content || ''), 400)}`;
+            })
+            .join('\n') || '(no messages yet)';
+
+        const judgePrompt = `You are analysing a rental negotiation between a TENANT (our side, AI-assisted) and a LANDLORD. Report ONLY what is actually true in the transcript. Do not infer agreement from politeness.
+
+LISTING ASKING PRICE: ${askingPrice ? `$${askingPrice}/month` : 'unknown'}
+
+TRANSCRIPT (oldest to newest):
+${transcript}
+
+LANDLORD'S NEWEST MESSAGE: "${sanitizeForPrompt(String(lastLandlordMessage || ''), 500)}"
+
+Return ONLY a JSON object, no prose, with exactly these keys:
+{
+  "landlord_intent": one of ["smalltalk","answering_question","asking_question","making_offer","accepting_our_offer","rejecting","scheduling_viewing","hostile","unclear"],
+  "landlord_named_price": number or null,   // a rent figure THE LANDLORD stated in their newest message; null if none
+  "landlord_asked": string or null,          // the question the landlord wants answered, in plain words; null if none
+  "agreement_reached": boolean,              // true ONLY if both sides explicitly settled on the same rent figure
+  "agreed_price": number or null,            // that figure, else null
+  "price_discussed": boolean,                // has ANY rent figure been raised by either side anywhere in the transcript
+  "tone": one of ["neutral","warm","impatient","hostile"],
+  "ready_to_close": boolean,                 // landlord is trying to finalise (sign/deposit/meet to sign)
+  "recommended_phase": one of ["INTRODUCTION","RAPPORT_BUILDING","QUALIFICATION","PRICE_INTRODUCTION","AVAILABILITY_DISCUSSION","ACTIVE_NEGOTIATION","CLOSING"],
+  "reason": string                           // one short sentence justifying recommended_phase
+}
+
+RULES:
+- "agreement_reached" is true ONLY when a specific number was proposed by one side and clearly accepted by the other. Vague warmth ("sounds good", "that works for you?") is NOT agreement.
+- A price the landlord names is an OFFER, never an acceptance, unless it matches a figure the tenant already proposed.
+- If the landlord is hostile or swearing, set tone "hostile" and never set agreement_reached true.
+- Never recommend CLOSING while price_discussed is false.
+- Judge only the LANDLORD's meaning. Questions the TENANT asked are not landlord intent.`;
+
+        let verdict;
+        try {
+            const raw = await callOpenAI({
+                messages: [
+                    { role: 'system', content: 'You output strict JSON only. No markdown fences, no commentary.' },
+                    { role: 'user', content: judgePrompt }
+                ],
+                model: config.OPENAI_MODEL || 'gpt-3.5-turbo',
+                maxTokens: 320,
+                temperature: 0
+            });
+            // callAI resolves to { content, tokensUsed, model, provider } — the
+            // text lives on .content, not on the result itself.
+            const jsonText = String(raw?.content || '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+            if (!jsonText) throw new Error('Empty completion from provider');
+            verdict = JSON.parse(jsonText.slice(jsonText.indexOf('{'), jsonText.lastIndexOf('}') + 1));
+        } catch (parseErr) {
+            console.warn('⚖️ Judge unavailable or unparseable — falling back to conservative verdict:', parseErr.message);
+            verdict = {
+                landlord_intent: 'unclear', landlord_named_price: null, landlord_asked: null,
+                agreement_reached: false, agreed_price: null, price_discussed: false,
+                tone: 'neutral', ready_to_close: false,
+                recommended_phase: 'ACTIVE_NEGOTIATION',
+                reason: 'Judge unavailable; staying in negotiation rather than assuming a close.'
+            };
+        }
+
+        // ---- Deterministic policy layer. The tenant's numbers, not the model's opinion. ----
+        const ceiling = Math.min(askingPrice || Infinity, budget || Infinity);
+        const namedPrice = Number(verdict.landlord_named_price) || null;
+        const policy = {
+            ceiling: Number.isFinite(ceiling) ? ceiling : null,
+            landlord_price_above_ceiling: !!(namedPrice && Number.isFinite(ceiling) && namedPrice > ceiling),
+            may_accept: false,
+            must_counter_at: null,
+            blocked_reason: null
+        };
+
+        if (verdict.agreement_reached && verdict.agreed_price) {
+            const agreed = Number(verdict.agreed_price);
+            if (Number.isFinite(ceiling) && agreed > ceiling) {
+                policy.blocked_reason = `Model reported agreement at $${agreed}, above the $${Math.round(ceiling)} ceiling. Acceptance refused.`;
+                policy.must_counter_at = Math.round(ceiling);
+            } else {
+                policy.may_accept = true;
+            }
+        } else if (policy.landlord_price_above_ceiling) {
+            policy.blocked_reason = `Landlord asked $${namedPrice}, above the $${Math.round(ceiling)} ceiling.`;
+            policy.must_counter_at = Math.round(ceiling);
+        }
+
+        // A close is only permitted once money has actually been discussed.
+        if (verdict.recommended_phase === 'CLOSING' && !verdict.price_discussed) {
+            verdict.recommended_phase = 'PRICE_INTRODUCTION';
+            verdict.reason = 'Overridden: cannot close before rent has been discussed.';
+        }
+
+        res.json({ verdict, policy });
+    } catch (error) {
+        console.error('Error in /api/negotiate/judge:', error.message);
+        res.status(500).json({ error: 'Judge failed', detail: error.message });
+    }
+});
+
+// POST /api/negotiate/reply - ONE call: the model runs the whole conversation.
+//
+// This replaces the phase state machine + keyword regexes + canned fallbacks.
+// Those tried to encode "what is happening" in code, and code cannot read
+// intent: our own question containing "that works" was mistaken for a closed
+// deal, which skipped price negotiation and accepted $5,000 on a $3,675 flat.
+//
+// The split now is:
+//   MODEL  — decides what to say, when to push on price, when to close, how to
+//            answer whatever the landlord just asked. All of the judgement.
+//   CODE   — owns the tenant's parameters and the arithmetic. It sets the
+//            ceiling and refuses any reply that commits above it. The model is
+//            never trusted with the number, only with the words.
+app.post('/api/negotiate/reply', openAiRateLimitMiddleware, async (req, res) => {
+    try {
+        const { listing, tenantParams, messageHistory, lastLandlordMessage } = req.body || {};
+
+        const asking = Number(listing?.price) || null;
+        const budget = Number(tenantParams?.monthly_budget) || null;
+        // Negotiating DOWN: agreeing at or above asking is never a win, so the
+        // ceiling is the lower of the two. Infinity only if we know neither.
+        const ceiling = Math.min(asking || Infinity, budget || Infinity);
+        const hasCeiling = Number.isFinite(ceiling);
+
+        const p = tenantParams || {};
+        const known = [
+            asking ? `Listing asking price: $${asking}/month` : null,
+            listing?.title ? `Listing: ${sanitizeForPrompt(listing.title, 120)}` : null,
+            budget ? `YOUR MAXIMUM you can pay: $${budget}/month — this is a hard limit` : null,
+            p.movein_date ? `Your move-in date: ${sanitizeForPrompt(p.movein_date, 30)}` : 'Your move-in date: flexible, as soon as it is available',
+            p.lease_length ? `Lease you want: ${sanitizeForPrompt(p.lease_length, 30)}` : null,
+            Array.isArray(p.available_days) && p.available_days.length
+                ? `You can ONLY view the place on: ${p.available_days.join(', ')} — never agree to any other day`
+                : null,
+            Array.isArray(p.must_haves) && p.must_haves.length
+                ? `Things you need: ${p.must_haves.map(m => String(m).replace(/_/g, ' ')).join(', ')}`
+                : null,
+            p.employment ? `Your job: ${sanitizeForPrompt(p.employment, 60)}` : 'Your job: stable full-time work, good references',
+            p.assertiveness ? `Negotiating style: ${sanitizeForPrompt(p.assertiveness, 30)}` : null,
+            // --- the rest of the goals panel ---
+            p.target_reduction ? `You want to get about $${Number(p.target_reduction)}/month off the asking price` : null,
+            p.movein_flexibility ? `Move-in flexibility: ${sanitizeForPrompt(p.movein_flexibility, 30)}` : null,
+            Array.isArray(p.available_time) && p.available_time.length
+                ? `Times of day you can view: ${p.available_time.join(', ')}` : null,
+            p.meeting_format ? `You prefer to view by: ${sanitizeForPrompt(p.meeting_format, 30)}` : null,
+            p.income_confidence ? `Your income situation: ${sanitizeForPrompt(p.income_confidence, 40)}` : null,
+            p.pets && p.pets !== 'none' ? `You have pets: ${sanitizeForPrompt(p.pets, 20)} — raise this before signing` : null,
+            p.pets === 'none' ? 'You have no pets' : null,
+            p.occupants ? `People moving in: ${Number(p.occupants)}` : null,
+            p.non_smoker ? 'You are a non-smoker' : null,
+            p.tone ? `Your tone: ${sanitizeForPrompt(p.tone, 30)}` : null,
+            // Concessions to chase when the landlord will not move on rent.
+            [
+                p.ask_utilities_included ? 'utilities included' : null,
+                p.ask_lower_deposit ? 'a lower deposit' : null,
+                p.ask_first_month_free ? 'first month free or a move-in incentive' : null
+            ].filter(Boolean).length
+                ? `If they will not drop the rent, try to win instead: ${[
+                    p.ask_utilities_included ? 'utilities included' : null,
+                    p.ask_lower_deposit ? 'a lower deposit' : null,
+                    p.ask_first_month_free ? 'first month free or a move-in incentive' : null
+                ].filter(Boolean).join(', ')}`
+                : null
+        ].filter(Boolean).join('\n');
+
+        const history = Array.isArray(messageHistory) ? messageHistory : [];
+        const transcript = history
+            .slice(-16)
+            .map(m => `${(m?.sender === 'ai' || m?.sender === 'assistant') ? 'YOU' : 'LANDLORD'}: ${sanitizeForPrompt(String(m?.content || ''), 400)}`)
+            .join('\n') || '(you have not messaged them yet)';
+
+        // Anti-repetition. The model kept re-sending the same sentence — three
+        // consecutive turns of "I can only pay $X, can we agree?" — because
+        // nothing told it what it had already tried. Feed our own past lines
+        // back as an explicit do-not-repeat list, and count how many times we
+        // have already pushed the same budget number so the prompt can demand
+        // a change of tactic instead of another restatement.
+        const ourLines = history
+            .filter(m => m?.sender === 'ai' || m?.sender === 'assistant')
+            .map(m => String(m.content || '').trim())
+            .filter(Boolean);
+        const budgetAsks = budget
+            ? ourLines.filter(l => l.includes(String(budget)) || l.includes(String(Math.round(budget)))).length
+            : 0;
+        const alreadySaid = ourLines.slice(-6).map(l => `- "${sanitizeForPrompt(l, 220)}"`).join('\n');
+
+        // What is already SETTLED. Without this the model has no concept of a
+        // finished sub-negotiation: in a real transcript the landlord agreed to
+        // $3200, and the AI then re-opened the rent three more times ("let's
+        // finalize the rent price", "what's the rent looking like") until the
+        // landlord snapped "we mentioned it 3 times?". Anything settled here is
+        // declared closed in the prompt and must not be renegotiated.
+        const landlordLines = history
+            .filter(m => m && m.sender !== 'ai' && m.sender !== 'assistant')
+            .map(m => String(m.content || '').toLowerCase());
+        const allText = history.map(m => String(m?.content || '')).join(' ');
+        const ourNumbers = ourLines.join(' ').match(/\$?\s?(\d{3,5})/g) || [];
+        const landlordAgreed = landlordLines.some(l =>
+            /\b(ok|okay|fine|deal|agreed|sure|yes|done|works|sounds good)\b/.test(l)
+        );
+        // Price is settled when a figure has been named and the landlord agreed —
+        // this must NOT depend on a budget being configured. It used to require
+        // `budget`, so on any surface without the goals panel (the listings-page
+        // chat has none) it was permanently false and the AI re-asked "so what's
+        // the rent going to be?" after the number was already agreed.
+        const namedFigures = (allText.match(/\$?\s?\b(\d{3,5})\b/g) || [])
+            .map(x => Number(String(x).replace(/[^\d]/g, '')))
+            .filter(n => n >= 300 && n <= 20000);
+        const settledPrice = namedFigures.length ? namedFigures[namedFigures.length - 1] : null;
+        const priceSettled = !!(settledPrice && landlordAgreed);
+
+        // A viewing is settled once a day AND a time are both on the table.
+        const dayMatch = allText.match(/\b(saturday|sunday|monday|tuesday|wednesday|thursday|friday|tomorrow|tonight)\b/i);
+        const timeMatch = allText.match(/\b(\d{1,2})(:\d{2})?\s?(am|pm)\b/i);
+        const viewingSettled = !!(dayMatch && timeMatch);
+        const viewingWhen = viewingSettled ? `${dayMatch[0]} at ${timeMatch[0]}` : null;
+
+        // Anything the landlord has already told us. Re-asking these is what made
+        // the AI look broken: it asked about laundry, was told there is none, then
+        // asked about laundry again two messages later.
+        const landlordText = landlordLines.join(' ');
+        const answered = [
+            /laundry|washer|dryer/.test(landlordText) ? 'laundry' : null,
+            /parking|garage|driveway/.test(landlordText) ? 'parking' : null,
+            /utilit|hydro|water|heat|electric/.test(landlordText) ? 'utilities' : null,
+            /pet|dog|cat/.test(landlordText) ? 'pets' : null,
+            /deposit/.test(landlordText) ? 'the deposit' : null,
+            /furnish/.test(landlordText) ? 'furnishing' : null,
+            /availab|move.?in|immediate/.test(landlordText) ? 'availability' : null,
+            /address|street|road|ave|blvd/.test(landlordText) ? 'the address' : null
+        ].filter(Boolean);
+
+        const settledRules = [
+            priceSettled
+                ? `RENT IS SETTLED at $${settledPrice}/month — agreed by both sides. NEVER ask about rent, price, budget, "what's the rent going to be" or "finalizing the price" again. Do not re-confirm the number.`
+                : null,
+            viewingSettled
+                ? `THE VIEWING IS BOOKED for ${viewingWhen}. Never ask what day or what time again — you already know. If you need to refer to it, state it: "see you ${viewingWhen}".`
+                : null,
+            answered.length
+                ? `THE LANDLORD HAS ALREADY ANSWERED: ${answered.join(', ')}. Asking about any of these again makes you look like a bot that isn't reading. Do not.`
+                : null,
+            (priceSettled && viewingSettled)
+                ? 'Everything important is agreed — rent AND viewing. The negotiation is OVER. Your reply must be a short friendly sign-off of under 12 words, mentioning NO price, NO numbers and NO questions. Something like "Great, see you then — thanks!" is exactly right. Do not sell yourself, do not restate terms, do not add conditions.'
+                : null
+        ].filter(Boolean).join('\n');
+
+        // Escalation ladder: repeating the same ask is the weakest move
+        // available. Each rung must introduce something the landlord has not
+        // heard yet, or close.
+        let escalation = '';
+        if (budgetAsks >= 1) {
+            const rungs = [
+                `You have ALREADY named $${Math.round(ceiling)} ${budgetAsks} time(s). Do NOT state that number again as a bare request. Change tactic.`,
+                'Pick ONE tactic you have not used yet:',
+                '  a) Justify it once with something concrete about you (reliable payer, long lease, move in quickly, references ready).',
+                p.ask_utilities_included || p.ask_lower_deposit || p.ask_first_month_free
+                    ? '  b) Keep their rent number but ask for a concession instead (the ones listed above) — say plainly you could live with their price if X were included.'
+                    : '  b) Offer a trade: a longer lease, earlier move-in, or a bigger deposit in exchange for the lower rent.',
+                asking && hasCeiling && asking > ceiling
+                    ? `  c) Split the difference ONCE with a specific new number between $${Math.round(ceiling)} and $${asking} — but never above $${Math.round(ceiling)}.`
+                    : '  c) Ask what number WOULD work for them, so they name it.',
+                '  d) If they have refused three or more times, state your final position in one line and leave the door open. Do not beg.'
+            ];
+            escalation = '\n\nYOU ARE REPEATING YOURSELF — ESCALATE:\n' + rungs.join('\n');
+        }
+
+        const system = `You are a real person renting a flat, texting a landlord. You are NOT an AI and must never hint otherwise.
+
+WHAT YOU KNOW ABOUT YOURSELF:
+${known}
+
+HARD RULES — breaking these ruins the deal:
+${hasCeiling ? `1. NEVER agree to, accept, or propose any rent above $${Math.round(ceiling)}/month. If they ask more, counter at or below $${Math.round(ceiling)}. Walk the price down, never up.` : '1. Do not agree to any rent figure yet.'}
+1b. ${asking && (!budget || budget >= asking) ? `You have NOT been given a target price. Your job is still to get the rent DOWN from $${asking}. NEVER open by confirming or accepting the asking price — always ask for a reduction at least once before agreeing to anything.` : 'Push for the best rent you can get.'}
+2. Never agree to a viewing, deposit or signing until the rent number has actually been settled. Sort money first.
+3. Questions about YOU (move-in, budget, job, lease) are yours to answer from the facts above. NEVER ask the landlord to tell you your own plans. If a detail isn't listed above, say you're flexible — do not invent specifics.
+4. Never repeat a question they already answered.
+5. If they turn hostile, stay calm, apologise once, keep it to one short line.
+6. NEVER send a message that repeats a point you have already made. Every message must add something new — a new reason, a new offer, a new question, or a close. Restating the same request in different words is the worst thing you can do.
+7. You do NOT know today's date or the day of the week, and you have no calendar. If asked what day it is, reply exactly in this spirit: "Haha, I've lost track — what day are you thinking?" NEVER state a weekday, NEVER write a placeholder like [day] or [date], and never guess.
+9. Write only finished sentences. NEVER emit square-bracket placeholders, blanks or template text of any kind — if you don't know something, say you don't know it in plain words.
+8. Raise anything you need (parking, laundry, pets, utilities) BEFORE agreeing a price, never after.${settledRules ? `
+
+ALREADY SETTLED — DO NOT REOPEN:
+${settledRules}` : ''}${alreadySaid ? `
+
+YOU HAVE ALREADY SENT THESE — do not paraphrase or repeat any of them:
+${alreadySaid}` : ''}${escalation}
+
+HOW YOU WRITE: like a text message. Never use em dashes (—) or en dashes (–); use commas, full stops or brackets instead. 1-3 short sentences. Contractions. No bullet points, no greetings like "Dear", no sign-off, no emoji.
+
+Reply with ONLY this JSON:
+{"message": "<what you send them>", "agreeing_to_price": <the rent number you are committing to in this message, or null>, "note": "<3-6 words on your tactic>"}`;
+
+        const user = `CONVERSATION SO FAR:
+${transcript}
+
+LANDLORD JUST SAID: "${sanitizeForPrompt(String(lastLandlordMessage || ''), 500)}"
+
+Write your next message.`;
+
+        const raw = await callOpenAI({
+            messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+            model: config.OPENAI_MODEL || 'gpt-3.5-turbo',
+            maxTokens: 260,
+            temperature: 0.75
+        });
+
+        let out;
+        try {
+            const t = String(raw?.content || '').replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
+            out = JSON.parse(t.slice(t.indexOf('{'), t.lastIndexOf('}') + 1));
+        } catch (e) {
+            // Keep the words if the JSON wrapper failed; treat as committing to nothing.
+            out = { message: String(raw?.content || '').trim(), agreeing_to_price: null, note: 'unparsed' };
+        }
+
+        // ---- The only thing code decides: the money. ----
+        const committing = Number(out.agreeing_to_price) || null;
+        const guard = { ceiling: hasCeiling ? Math.round(ceiling) : null, overridden: false, reason: null };
+
+        // The declared field is not enough. In a real run the model wrote "I can
+        // do $3250, that's as low as I can go" while reporting
+        // agreeing_to_price: null — so the over-ceiling offer went straight to
+        // the landlord unchallenged. Scan the message text for any figure we
+        // are offering above the ceiling, not just the number it admits to.
+        // Which way round the test goes matters. This used to require the
+        // message to match a list of offer phrasings ("i can do", "how about",
+        // "let's say"), and anything phrased differently was waved through: on
+        // a $1750 ceiling the model wrote "would you be willing to meet at
+        // $1800 with hydro included?" and it went to the landlord unchallenged,
+        // because "meet at" was not on the list. There is no finite list of
+        // ways to offer someone money.
+        //
+        // So the default is now "an over-ceiling figure in OUR message is an
+        // offer", and the exceptions are the narrow, checkable cases where the
+        // number is plainly theirs and not ours: quoting their price back, or
+        // rejecting it. Anything the exceptions do not cover fails safe into
+        // the guard, which rewrites the line rather than sending it.
+        // Per sentence, because one message routinely does both: "$1850 is
+        // over what I can manage, I can do $1750."
+        //
+        // Hoisted out of the ceiling check so the self-bidding guard below can
+        // use the same test. It could not, and so counted a price the landlord
+        // had named — their own asking price, quoted back when they asked what
+        // the listing was at — as us raising our offer. Every reply that
+        // answered that question was thrown away and replaced with the canned
+        // "I'd still be looking at $X" line, so a landlord who asked twice got
+        // the identical sentence twice, and one who kept asking got it forever.
+        const notOurs = /\b(you (said|offered|mentioned|quoted|asked for|are asking)|your (asking|listed|price|offer)|the listing (says|is|has|was)|(original|originally) (listed|asking|at)|asking price|list price|listed (at|for)|advertised at)\b/i;
+        const rejecting = /\b(can'?t|cannot|can not|couldn'?t|unable to|won'?t|no way i can)\b|\b(is|are|that'?s|thats) (over|above|beyond|too (much|high)|more than|outside|out of)\b|\b(over|above|beyond|more than|outside|out of) (what|my|our) \b/i;
+
+        /// Figures this message is actually putting on the table, ignoring the
+        /// ones it is only quoting back or turning down.
+        const figuresWeAreOffering = (text) => String(text || '')
+            .split(/(?<=[.!?])\s+/)
+            .flatMap(sentence => {
+                if (notOurs.test(sentence) || rejecting.test(sentence)) return [];
+                return (sentence.match(/\$\s?\d{3,5}(?:\.\d{2})?/g) || [])
+                    .map(s => Number(s.replace(/[^\d.]/g, '')))
+                    .filter(n => n >= 300);
+            });
+
+        let textOffer = null;
+        if (hasCeiling) {
+            const offered = figuresWeAreOffering(out.message).filter(n => n > ceiling);
+            if (offered.length) textOffer = Math.max.apply(null, offered);
+        }
+
+        // Stop asking, start offering. When the landlord never answers with a
+        // number ("yep", "yeah", "im free this weekend"), the model kept
+        // rewording the same question — four rent asks in a row in a real
+        // replay, which is precisely what makes a landlord stop replying. After
+        // ONE unanswered ask, put a concrete number on the table instead —
+        // asking twice is already the pattern landlords react badly to.
+        const priceAskRe = /\b(rent|price)\b[^.?!]*\?|how much|what.{0,12}(rent|price)|discuss the (rent|price)|lock in the (rent|price)/i;
+        const unansweredAsks = ourLines.filter(l => priceAskRe.test(l)).length;
+        const landlordNamedAny = /\$?\s?\b\d{3,5}\b/.test(landlordLines.join(' '));
+        if (!priceSettled && !landlordNamedAny && unansweredAsks >= 1 && priceAskRe.test(String(out.message || ''))) {
+            const anchorPrice = budget ? Math.round(budget) : (asking ? Math.round(asking * 0.9) : null);
+            if (anchorPrice) {
+                console.warn(`🛡️ ${unansweredAsks} unanswered price asks — anchoring at $${anchorPrice} instead of asking again.`);
+                out.message = `I'd be able to do $${anchorPrice}/month. Would that work for you?`;
+                out.agreeing_to_price = null;
+            }
+        }
+
+        // Never bid against yourself. In a replay of a real conversation the AI
+        // offered $3550, got no answer, then offered $3600 one turn later —
+        // raising its own price unprompted, which hands the landlord money for
+        // nothing. Any new offer must be at or below the best (lowest) offer we
+        // have already made.
+        const ourPastOffers = ourLines
+            .flatMap(l => (l.match(/\$\s?\d{3,5}/g) || []))
+            .map(x => Number(x.replace(/[^\d]/g, '')))
+            .filter(n => n >= 300 && n <= 20000);
+        const bestOffer = ourPastOffers.length ? Math.min(...ourPastOffers) : null;
+        if (bestOffer) {
+            // Only figures we are actually offering count. Matching every "$"
+            // in the message meant answering "what was the listing at?" with
+            // their own number tripped the guard.
+            const newOffer = figuresWeAreOffering(out.message)
+                .filter(n => n <= 20000)
+                .find(n => n > bestOffer);
+            if (newOffer && !priceSettled) {
+                console.warn(`🛡️ Blocked self-bidding: $${newOffer} is above our own earlier $${bestOffer}.`);
+                out.message = `I'd still be looking at $${bestOffer}. Can you make that work?`;
+                out.agreeing_to_price = null;
+            }
+        }
+
+        // Deterministic settled-topic guard. The prompt already forbids
+        // reopening an agreed rent or a booked viewing, but gpt-3.5 drifts back
+        // to them under pressure — in a real transcript it asked "so what's the
+        // rent going to be?" one message after agreeing, and re-asked a viewing
+        // time the landlord had already given. Prompt rules are advisory; this
+        // is not.
+        const asks = /\?/.test(String(out.message || ''));
+        // Only fire when the reply is genuinely RE-ASKING about the rent. The
+        // first version matched any message containing a dollar figure, so a
+        // perfectly good "pets are fine, and $3330 still works, what's next?"
+        // was rewritten to the canned line — every turn, making the AI look
+        // frozen while the landlord talked about pets and utilities.
+        const reopensRent = /(what.{0,15}(rent|price)|how much|confirm the (rent|price)|settle the (rent|price)|discuss the (rent|price)|finali[sz]e the (rent|price)|(rent|price) (going to be|be\?))/i.test(String(out.message || ''));
+        if (asks && priceSettled && reopensRent) {
+            console.warn(`🛡️ Blocked re-opening settled rent ($${settledPrice}).`);
+            out.message = viewingSettled
+                ? `Sounds good, all set at $${settledPrice}. See you ${viewingWhen}.`
+                : `Great, $${settledPrice} works. What's the next step?`;
+            out.agreeing_to_price = settledPrice;
+        } else if (asks && viewingSettled && /\b(what time|which day|when (can|could|should|works)|time works|day works)\b/i.test(out.message)) {
+            console.warn(`🛡️ Blocked re-asking a booked viewing (${viewingWhen}).`);
+            out.message = `See you ${viewingWhen}. Anything I should bring?`;
+        }
+
+        if (hasCeiling && (committing > ceiling || textOffer)) {
+            const bad = committing > ceiling ? committing : textOffer;
+            guard.overridden = true;
+            guard.reason = `Model tried to offer $${bad}, above the $${Math.round(ceiling)} ceiling.`;
+            out.message = asking && bad > asking
+                ? `Hold on, the listing says $${asking}, so $${bad} is above asking. I can do $${Math.round(ceiling)}. Does that work?`
+                : `That's over what I can manage. I can do $${Math.round(ceiling)}. Would that work?`;
+            out.agreeing_to_price = null;
+        }
+
+        // Never send the same sentence twice.
+        //
+        // Every guard above rewrites out.message to one of six fixed lines, so
+        // any guard firing on two turns running sends a landlord the identical
+        // sentence word for word. That is the clearest possible tell that they
+        // are talking to a machine, and the fastest way to make them stop
+        // replying. The individual repetitions were each fixed as they turned
+        // up; this is the check none of them had.
+        //
+        // At the single exit point, for the same reason the dash scrub below is
+        // here: a repeat can come from the model or from any of those
+        // templates, and the last one to run is the one that gets sent.
+        const normalise = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+        if (normalise(out.message) && ourLines.some(l => normalise(l) === normalise(out.message))) {
+            console.warn('🛡️ Suppressed a repeat of something we already said.');
+            out.message = priceSettled
+                ? `Just confirming we're set at $${settledPrice}. Anything else you need from me?`
+                : bestOffer
+                    ? `I don't want to go round in circles. $${bestOffer} is where I am, so if that doesn't work for you, no hard feelings and thanks for your time.`
+                    : `Happy to keep this simple. What would work on your end?`;
+            out.agreeing_to_price = priceSettled ? settledPrice : null;
+        }
+
+        // Final scrub on everything we send. Em/en dashes read as machine-written
+        // to a lot of people, and they can arrive from the model OR from any of
+        // the rewrite templates above, so stripping them at the single exit
+        // point is the only way to be sure none slip through.
+        out.message = withoutEmDashes(out.message);
+
+        // Tell the caller when the negotiation is actually finished, so the UI can
+        // celebrate instead of the tenant having to read the thread and work it
+        // out for themselves. Both halves must be true: a price agreed AND a
+        // viewing booked.
+        const dealClosed = !!(priceSettled && viewingSettled);
+
+        res.json({
+            dealClosed,
+            agreedPrice: priceSettled ? settledPrice : null,
+            viewingWhen: viewingSettled ? viewingWhen : null,
+            savedVsAsking: (priceSettled && asking && settledPrice < asking) ? asking - settledPrice : 0,
+            message: out.message,
+            committing_to: out.agreeing_to_price ?? null,
+            tactic: out.note || null,
+            guard
+        });
+    } catch (error) {
+        console.error('Error in /api/negotiate/reply:', error.message);
+        res.status(500).json({ error: 'Reply generation failed', detail: error.message });
+    }
+});
+
+/**
+ * Strips em and en dashes out of anything a person will read.
+ *
+ * Models reach for them constantly and they read as machine-written to a lot of
+ * people. `/api/negotiate/reply` has stripped them at its exit point for a
+ * while; the assistant chat did not, which is why they kept appearing there
+ * however firmly the prompt asked it not to. Prompt instructions are a request,
+ * this is the guarantee.
+ */
+function withoutEmDashes(text) {
+    return String(text || '')
+        .replace(/\s*[\u2014\u2013]\s*/g, ', ')   // "yes - see you" -> "yes, see you"
+        .replace(/,\s*,/g, ',')                     // collapse any doubled commas
+        .replace(/,\s*([.!?])/g, '$1')              // ", ." -> "."
+        .replace(/\s{2,}/g, ' ')
+        .trim();
+}
+
+// POST /api/negotiate/reset - delete a tenant's negotiation threads.
+//
+// This MUST run server-side. Row-level security forbids the browser key from
+// deleting rows in `conversations` / `messages`, and PostgREST reports that
+// refusal as HTTP 200 with an empty array — indistinguishable from a real
+// delete. The old client-side reset therefore reported success while removing
+// nothing, so "Reset" appeared to do nothing at all no matter how many times
+// it was pressed. Here we use the service-role client and report actual counts.
+app.post('/api/negotiate/reset', async (req, res) => {
+    try {
+        const { userEmail, listingId } = req.body || {};
+        if (!userEmail) return res.status(400).json({ error: 'userEmail is required' });
+        if (!supabase) return res.status(503).json({ error: 'Database unavailable' });
+
+        // Only ever threads this tenant is part of — never anyone else's.
+        // Only the AI's own threads.
+        //
+        // This used to take every conversation the person was part of and
+        // delete it, along with every message in it — so "reset negotiations"
+        // also erased their real conversations with landlords and roommates.
+        // Somebody clearing out a few stalled negotiations lost the thread they
+        // had been having with an actual person, with no warning and no way
+        // back.
+        //
+        // ai_managed is set when a negotiation thread is created and is what
+        // the negotiator daemon itself selects on, so it is the same definition
+        // of "a negotiation" the rest of the system uses.
+        let q = supabase
+            .from('conversations')
+            .select('id')
+            .eq('ai_managed', true)
+            .or(`sender_email.eq.${userEmail},receiver_email.eq.${userEmail}`);
+        if (listingId) q = q.eq('listing_id', listingId);
+
+        const { data: convos, error: findErr } = await q;
+        if (findErr) throw findErr;
+
+        const ids = (convos || []).map(c => c.id);
+        if (!ids.length) {
+            return res.json({ conversationsDeleted: 0, messagesDeleted: 0, note: 'No AI negotiations to reset.' });
+        }
+
+        // Count first so we can report honestly, then delete messages before
+        // the parent rows.
+        const { count: msgCount } = await supabase
+            .from('messages')
+            .select('id', { count: 'exact', head: true })
+            .in('conversation_id', ids);
+
+        const { error: msgErr } = await supabase.from('messages').delete().in('conversation_id', ids);
+        if (msgErr) throw msgErr;
+
+        const { error: convErr } = await supabase.from('conversations').delete().in('id', ids);
+        if (convErr) throw convErr;
+
+        // Verify rather than assume — the whole point of this endpoint.
+        const { data: leftover } = await supabase.from('conversations').select('id').in('id', ids);
+        const remaining = (leftover || []).length;
+
+        console.log(`♻️ Reset for ${userEmail}: ${ids.length - remaining}/${ids.length} threads deleted`);
+        res.json({
+            conversationsDeleted: ids.length - remaining,
+            messagesDeleted: msgCount || 0,
+            remaining,
+            note: remaining ? `${remaining} thread(s) could not be deleted.` : null
+        });
+    } catch (error) {
+        console.error('Error in /api/negotiate/reset:', error.message);
+        res.status(500).json({ error: 'Reset failed', detail: error.message });
     }
 });
 
@@ -7422,7 +9471,228 @@ function formatTimeAgo(date) {
     return `${Math.floor(diffInSeconds / 604800)} weeks ago`;
 }
 
-// API: Upload government ID for manual review (FREE - no Azure required)
+/**
+ * Checks that an upload is actually a government ID before it is stored.
+ *
+ * Two random photos used to sail straight through to "pending_review", which
+ * put junk in front of a human and told the person who uploaded it nothing was
+ * wrong until someone got round to looking. Azure's prebuilt-idDocument model
+ * reads passports and driving licences and returns the fields it found, so an
+ * image with no document in it is obvious immediately.
+ *
+ * This is a filter, not the decision. Anything that passes still goes to a
+ * person: a model reading a name off a card cannot tell you the card is real.
+ *
+ * Returns { ok, reason, fields }. When Azure is unreachable or unconfigured it
+ * returns ok with `skipped`, because an outage at Microsoft must not mean
+ * nobody on the site can get verified.
+ */
+async function askWorker(task, buffer) {
+    // Its own variable, deliberately. CLOUDFLARE_WORKER_URL points at the
+    // property-photo worker, which has no idea what `task` means and happily
+    // ran a listing appraisal on someone's passport — returning a success with
+    // no verdict in it, so every upload sailed through.
+    const workerUrl = process.env.CLOUDFLARE_ID_WORKER_URL;
+    if (!workerUrl) return null;
+
+    // Retried, because the common failure is temporary and used to be treated
+    // as permanent. Workers AI answers "3040: Capacity temporarily exceeded"
+    // under load; one attempt then meant no check ran, and a check that did not
+    // run was counted as a check that passed.
+    const attempts = 4;
+    let lastError;
+
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+        try {
+            const response = await fetch(workerUrl, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task, image: Array.from(buffer) }),
+                signal: AbortSignal.timeout(45000)
+            });
+
+            const payload = await response.json().catch(() => null);
+
+            if (response.ok && payload?.success) return payload.result;
+
+            const stated = payload?.error || `worker returned ${response.status}`;
+            lastError = new Error(stated);
+
+            // Only wait and try again when the model said it was busy or the
+            // edge returned a 5xx. A malformed image fails the same way every
+            // time, and retrying it just delays telling the person.
+            const busy = /capacity|temporarily|3040|rate limit|too many/i.test(stated)
+                || response.status >= 500;
+            if (!busy || attempt === attempts) throw lastError;
+
+            const backoff = 400 * Math.pow(2, attempt - 1);
+            console.warn(`🧠 ${task} check busy (attempt ${attempt}/${attempts}), retrying in ${backoff}ms: ${stated}`);
+            await new Promise(resolve => setTimeout(resolve, backoff));
+        } catch (error) {
+            lastError = error;
+            if (attempt === attempts) throw lastError;
+            // A timeout or a dropped connection is worth the same second try.
+            await new Promise(resolve => setTimeout(resolve, 400 * Math.pow(2, attempt - 1)));
+        }
+    }
+
+    throw lastError;
+}
+
+async function inspectIdDocument(buffer, mimetype) {
+    // Cloudflare Workers AI, and nothing behind it.
+    //
+    // Azure used to be the fallback. Its Document Intelligence call worked, but
+    // pairing it with a Face API that errored on every request produced the
+    // worst possible outcome: a failed check returned `ok: true`, so an upload
+    // nobody had looked at was indistinguishable from one that passed.
+    //
+    // PDFs are refused rather than waved through. Azure read them and the
+    // vision model does not, and "we cannot read this" must not keep meaning
+    // "fine".
+    if (mimetype === 'application/pdf') {
+        return {
+            ok: false,
+            reason: "We can't read PDFs. Take a photo of your ID instead, with all four corners visible."
+        };
+    }
+
+    let verdict;
+    try {
+        verdict = await askWorker('id-document', buffer);
+    } catch (error) {
+        console.error('ID check could not run:', error.message);
+        // Held for a person rather than accepted. The admin queue shows why,
+        // and `ok` stays true only so the upload is stored for them to look at.
+        return { ok: true, skipped: `check_unavailable: ${error.message}` };
+    }
+
+    if (!verdict) return { ok: true, skipped: 'no_checker_configured' };
+    return readIdVerdict(verdict);
+}
+
+/**
+ * Turns the vision model's answer into the same verdict shape the Azure path
+ * produces, so callers never need to know which one ran.
+ *
+ * Deliberately lenient about confidence: a model that is unsure about a real
+ * passport must not lock someone out of their own account. It only rejects when
+ * the answer is a clear no, and everything else goes to a person.
+ */
+function readIdVerdict(verdict) {
+    if (verdict.is_id_document === false) {
+        return {
+            ok: false,
+            reason: "We couldn't find a government ID in that photo. Upload a clear picture of your passport or driving licence, with all four corners visible."
+        };
+    }
+
+    const expiry = verdict.expiry_date ? new Date(verdict.expiry_date) : null;
+    if (expiry && !Number.isNaN(expiry.getTime()) && expiry < new Date()) {
+        return {
+            ok: false,
+            reason: `That ID looks like it expired on ${verdict.expiry_date}. Upload one that is still valid.`
+        };
+    }
+
+    return {
+        ok: true,
+        fields: {
+            checkedBy: 'cloudflare',
+            docType: verdict.document_type || null,
+            name: verdict.name || null,
+            showsFacePhoto: verdict.shows_face_photo ?? null,
+            dateOfExpiration: verdict.expiry_date || null,
+            countryRegion: verdict.country || null,
+            confidence: verdict.confidence ?? null,
+            modelNote: verdict.reason || null,
+            checkedAt: new Date().toISOString()
+        }
+    };
+}
+
+/**
+ * Checks a selfie is a photo of one person's face.
+ *
+ * Not a match against the ID: comparing two faces is a Limited Access feature
+ * behind an application, and getting it wrong is worse than not doing it. This
+ * rules out the obvious — a photo of a wall, a group shot, or a picture of a
+ * document sent as a selfie — and leaves the comparison to the reviewer, who
+ * has both images in front of them.
+ */
+async function inspectSelfie(buffer) {
+    let verdict;
+    try {
+        verdict = await askWorker('selfie', buffer);
+    } catch (error) {
+        console.error('Selfie check could not run:', error.message);
+        return { ok: true, skipped: `check_unavailable: ${error.message}` };
+    }
+
+    if (!verdict) return { ok: true, skipped: 'no_checker_configured' };
+
+    const count = Number(verdict.face_count);
+    const note = String(verdict.reason || '');
+
+    // What the model wrote, not the number it reported.
+    //
+    // `face_count` cannot be trusted: the worker takes it from the front of the
+    // model's own prose, and the model numbers its answers. A real selfie comes
+    // back "1 There is a man with short hair…" and a photo of an ID card comes
+    // back "1. The image shows a document with a photo section, but there is no
+    // visible human face." — both counted as one face. That is how a document
+    // reached the review queue as somebody's selfie.
+    //
+    // The sentence is right in both cases, so it is what gets read.
+    const saysNoFace = /\bno (visible |clear |discernible )?(human )?fac|cannot (see|find|make out) (a|any) fac|there (is|are) no fac|not a (photo|picture) of a (person|face)|does not show a fac|photo is blank/i.test(note);
+    const saysDocument = /\b(document|id card|identity card|identification card|identification|passport|driver'?s? licen[cs]e|driving licen[cs]e|photo section)\b/i.test(note);
+    const saysSeveral = /\b(two|three|four|several|multiple|group) (people|faces|persons)\b|\bmore than one (face|person)\b/i.test(note);
+
+    // A document is a document even when the model does not add that it cannot
+    // see a face — and it usually does not, because the card has a photo of one
+    // on it. Requiring both signals let exactly that through: "The image shows a
+    // sample identification card with a photo of a person on it" was read as a
+    // face and accepted.
+    //
+    // So this rejects on the document alone. Someone holding their ID up beside
+    // their face is turned away too, which is the right trade: the step asks for
+    // a photo of their face, the message says so, and they can send another. The
+    // opposite mistake puts an unverified stranger's document into the queue
+    // wearing the word "checked".
+    if (saysDocument) {
+        return {
+            ok: false,
+            reason: "That looks like a photo of a document rather than a selfie. Take a photo of your own face with the camera, with nothing else in the shot."
+        };
+    }
+
+    if (saysNoFace || count === 0) {
+        return {
+            ok: false,
+            reason: "We couldn't find a face in that photo. Take a clear selfie in good light, looking at the camera."
+        };
+    }
+
+    if (saysSeveral || (Number.isFinite(count) && count > 1)) {
+        return { ok: false, reason: "We found more than one face in that photo. Send one of just you." };
+    }
+
+    return {
+        ok: true,
+        fields: {
+            checkedBy: 'cloudflare',
+            // Reported as what it is. Recording the worker's number as a face
+            // count is what made the queue look like it had checked something.
+            faceCountReported: Number.isFinite(count) ? count : null,
+            faceCountTrusted: false,
+            isClear: verdict.is_clear ?? null,
+            modelNote: note || null,
+            checkedAt: new Date().toISOString()
+        }
+    };
+}
+
+// API: Upload government ID. Machine-checked, then reviewed by a person.
 app.post('/api/verify/upload-id', upload.single('idDocument'), async (req, res) => {
     try {
         if (!req.file) {
@@ -7450,6 +9720,17 @@ app.post('/api/verify/upload-id', upload.single('idDocument'), async (req, res) 
             mimetype: req.file.mimetype,
             size: req.file.size
         });
+
+        // Rejected uploads are not stored. Keeping a stranger's holiday snap in
+        // a bucket called govdocs helps nobody and is one more thing to leak.
+        const inspection = await inspectIdDocument(req.file.buffer, req.file.mimetype);
+        if (!inspection.ok) {
+            console.log('🚫 ID rejected automatically:', inspection.reason);
+            return res.status(422).json({ error: inspection.reason, status: 'rejected' });
+        }
+        if (inspection.skipped) {
+            console.log('⚠️ ID accepted without machine checks:', inspection.skipped);
+        }
 
         let idDocumentPath = null;
         let idDocumentBase64 = null;
@@ -7493,13 +9774,18 @@ app.post('/api/verify/upload-id', upload.single('idDocument'), async (req, res) 
                 idDocumentBase64 = req.file.buffer.toString('base64');
             }
 
-            // Save verification record with "pending_review" status
+            // Save the record for a person to review.
             try {
                 const verificationData = {
                     id_document_mimetype: req.file.mimetype,
                     original_filename: req.file.originalname,
                     file_size: req.file.size,
-                    uploaded_at: new Date().toISOString()
+                    uploaded_at: new Date().toISOString(),
+                    // What the machine read off it. The reviewer compares this
+                    // against the image and the account rather than starting
+                    // from nothing.
+                    machine_check: inspection.fields || null,
+                    machine_check_skipped: inspection.skipped || null
                 };
 
                 if (idDocumentPath) {
@@ -7510,20 +9796,32 @@ app.post('/api/verify/upload-id', upload.single('idDocument'), async (req, res) 
                     verificationData.storage_method = 'base64';
                 }
 
+                // `updated_at`, not `submitted_at`: that column has never
+                // existed on this table, so every insert failed, the error was
+                // logged and swallowed, and the endpoint still told people
+                // their ID was submitted. Nothing was ever stored, and nothing
+                // was ever reviewed.
                 const { error: verificationError } = await supabase
                     .from('user_verifications')
                     .upsert({
                         user_email: userEmail,
-                        id_verification_status: 'pending_review',
+                        // 'pending', not 'pending_review'. The table's check
+                        // constraint allows pending | verified | failed only,
+                        // and every other spelling in this file was silently
+                        // rejected by Postgres.
+                        id_verification_status: 'pending',
                         id_verification_data: verificationData,
-                        submitted_at: new Date().toISOString()
-                    });
+                        updated_at: new Date().toISOString()
+                    }, { onConflict: 'user_email' });
 
-                if (verificationError) {
-                    console.error('Error storing verification:', verificationError);
-                }
+                if (verificationError) throw verificationError;
             } catch (dbError) {
-                console.error('Database error:', dbError);
+                // Saying "submitted" when nothing was saved leaves someone
+                // waiting for a review that cannot happen.
+                console.error('Could not store verification:', dbError.message || dbError);
+                return res.status(500).json({
+                    error: "We couldn't save your document. Please try again in a moment."
+                });
             }
         }
 
@@ -7533,7 +9831,7 @@ app.post('/api/verify/upload-id', upload.single('idDocument'), async (req, res) 
         res.json({
             success: true,
             message: 'Your ID has been submitted for verification. You will be notified once reviewed.',
-            status: 'pending_review'
+            status: 'pending'
         });
 
     } catch (error) {
@@ -7558,6 +9856,15 @@ app.post('/api/verify/face-match', upload.single('facePhoto'), async (req, res) 
         }
 
         console.log('📸 Processing selfie upload for:', userEmail);
+
+        const selfieCheck = await inspectSelfie(req.file.buffer);
+        if (!selfieCheck.ok) {
+            console.log('🚫 Selfie rejected automatically:', selfieCheck.reason);
+            return res.status(422).json({ error: selfieCheck.reason, status: 'rejected' });
+        }
+        if (selfieCheck.skipped) {
+            console.log('⚠️ Selfie accepted without machine checks:', selfieCheck.skipped);
+        }
 
         if (!supabase) {
             return res.status(503).json({ error: 'Database service not available' });
@@ -7591,18 +9898,36 @@ app.post('/api/verify/face-match', upload.single('facePhoto'), async (req, res) 
                 console.error('Selfie upload error:', uploadError);
             }
 
-            // Update verification record with selfie info
-            await supabase
+            // Upsert, and only into columns this table actually has. The old
+            // update wrote `selfie_submitted_at`, which does not exist, so the
+            // selfie was uploaded to storage and then never recorded against
+            // anyone.
+            const selfieData = {
+                face_photo_path: fileName,
+                machine_check: selfieCheck.fields || null,
+                machine_check_skipped: selfieCheck.skipped || null,
+                uploaded_at: new Date().toISOString()
+            };
+
+            const { error: selfieError } = await supabase
                 .from('user_verifications')
-                .update({
-                    face_verification_status: 'pending_review',
-                    face_photo_path: fileName,
-                    selfie_submitted_at: new Date().toISOString()
-                })
-                .eq('user_email', userEmail);
+                .upsert({
+                    user_email: userEmail,
+                    face_verification_status: 'pending',
+                    // Its own column. Writing this into id_verification_data
+                    // would overwrite whatever the ID upload put there, and the
+                    // two are uploaded one after the other.
+                    face_verification_data: selfieData,
+                    updated_at: new Date().toISOString()
+                }, { onConflict: 'user_email' });
+
+            if (selfieError) throw selfieError;
 
         } catch (storageError) {
-            console.error('Storage error:', storageError);
+            console.error('Could not store selfie:', storageError.message || storageError);
+            return res.status(500).json({
+                error: "We couldn't save your photo. Please try again in a moment."
+            });
         }
 
         await logUserActivity(userEmail, 'selfie_submitted', 'Selfie photo submitted for review');
@@ -7610,7 +9935,7 @@ app.post('/api/verify/face-match', upload.single('facePhoto'), async (req, res) 
         res.json({
             success: true,
             message: 'Selfie submitted for verification. You will be notified once reviewed.',
-            status: 'pending_review'
+            status: 'pending'
         });
 
     } catch (error) {
@@ -7641,7 +9966,9 @@ app.post('/api/admin/verify-user', async (req, res) => {
             return res.status(400).json({ error: 'Action must be approve or reject' });
         }
 
-        const status = action === 'approve' ? 'verified' : 'rejected';
+        // 'failed', not 'rejected': the constraint has no 'rejected', so every
+        // rejection was refused by the database and the record stayed pending.
+        const status = action === 'approve' ? 'verified' : 'failed';
 
         const { error } = await supabase
             .from('user_verifications')
@@ -7657,6 +9984,22 @@ app.post('/api/admin/verify-user', async (req, res) => {
         if (error) {
             console.error('Error updating verification:', error);
             return res.status(500).json({ error: 'Failed to update verification' });
+        }
+
+        // The badge is read from two places: listings check
+        // user_verifications, the profile checks users.is_verified. Updating
+        // only one meant an approved host showed as verified in one view and
+        // not the other.
+        const { error: badgeError } = await supabase
+            .from('users')
+            .update({
+                is_verified: action === 'approve',
+                verification_badge_earned_at: action === 'approve' ? new Date().toISOString() : null
+            })
+            .eq('email', userEmail);
+
+        if (badgeError) {
+            console.error('Verification saved but badge not updated:', badgeError.message);
         }
 
         console.log(`✅ User ${userEmail} verification ${action}ed`);
@@ -7687,8 +10030,8 @@ app.get('/api/admin/pending-verifications', async (req, res) => {
         const { data, error } = await supabase
             .from('user_verifications')
             .select('*')
-            .in('id_verification_status', ['pending_review', 'pending'])
-            .order('submitted_at', { ascending: false });
+            .in('id_verification_status', ['pending'])
+            .order('updated_at', { ascending: false });
 
         if (error) {
             return res.status(500).json({ error: 'Failed to fetch verifications' });
@@ -7703,6 +10046,34 @@ app.get('/api/admin/pending-verifications', async (req, res) => {
 });
 
 // API: Get user verification status
+/**
+ * Which of a set of accounts are verified.
+ *
+ * The listings page reads rooms straight out of Supabase, which carries no
+ * verification column, and the table itself is hidden from the anon key by row
+ * level security - so a browser has no way to work this out for a page of
+ * cards. Asking per listing would be one request each; this answers for all of
+ * them at once.
+ *
+ * Returns only the addresses that are verified, so it says nothing about
+ * anyone who is not.
+ */
+app.post('/api/verify/status-batch', async (req, res) => {
+    try {
+        const emails = Array.isArray(req.body?.emails) ? req.body.emails : [];
+        // Bounded, because this is public and unauthenticated.
+        const wanted = [...new Set(emails.filter(e => typeof e === 'string' && e.includes('@')))].slice(0, 200);
+        if (!wanted.length) return res.json({ verified: [] });
+        if (!supabase) return res.json({ verified: [] });
+
+        const map = await fetchVerificationMap(supabase, wanted);
+        res.json({ verified: Object.keys(map) });
+    } catch (error) {
+        console.error('status-batch failed:', error.message || error);
+        res.json({ verified: [] });
+    }
+});
+
 app.get('/api/verify/status/:email', async (req, res) => {
     try {
         if (!supabase) {
@@ -7722,24 +10093,29 @@ app.get('/api/verify/status/:email', async (req, res) => {
             return res.status(500).json({ error: 'Failed to fetch verification status' });
         }
 
-        // is_verified on `users` is the actual gate the rest of the app should
-        // check (e.g. listing creation, messaging) -- user_verifications only
-        // tracks the underlying per-check (ID/face/phone) progress.
+        // Verified means user_verifications says so.
+        //
+        // This used to read `users.is_verified`, but real accounts are not in
+        // `users` — that table holds one row, and everybody actually lives in
+        // `profiles`. So the profile badge was decided by a lookup that never
+        // matched anyone, while listings decided it from user_verifications.
+        // One source, the one that has the data.
+        const approved = verification?.id_verification_status === 'verified';
+
         const { data: userRow } = await supabase
             .from('users')
             .select('is_verified, verification_badge_earned_at')
             .eq('email', email)
             .maybeSingle();
 
-        // Manual review system - no Azure needed
         res.json({
             verification: verification || {
                 user_email: email,
                 id_verification_status: 'not_submitted',
                 face_verification_status: 'not_submitted'
             },
-            isVerified: !!userRow?.is_verified,
-            verifiedAt: userRow?.verification_badge_earned_at || null,
+            isVerified: approved || !!userRow?.is_verified,
+            verifiedAt: verification?.reviewed_at || userRow?.verification_badge_earned_at || null,
             // Manual review mode - no external services needed
             verificationMode: 'manual_review'
         });
@@ -7761,6 +10137,56 @@ app.post('/api/verify/head-pose', upload.single('facePhoto'), async (req, res) =
 });
 
 // API: Admin - Clear all test data (listings, chats, activities, negotiations)
+/**
+ * A short-lived link to one submitted document, for the person reviewing it.
+ *
+ * `govdocs` is a private bucket, correctly: these are passports. Nothing in the
+ * app could read from it, so the review queue listed submissions that nobody
+ * could actually look at. Signed for ten minutes, long enough to check and not
+ * long enough to become a link that gets forwarded.
+ */
+app.get('/api/admin/verification-document', async (req, res) => {
+    try {
+        const adminKey = req.headers['x-admin-key'] || req.query.adminKey;
+        const validAdminKey = getAdminKey();
+        if (!validAdminKey || adminKey !== validAdminKey) {
+            return res.status(403).json({ error: 'Unauthorized' });
+        }
+        if (!supabase) return res.status(503).json({ error: 'Database unavailable' });
+
+        const { userEmail, kind } = req.query;
+        if (!userEmail) return res.status(400).json({ error: 'userEmail is required' });
+
+        const { data: record } = await supabase
+            .from('user_verifications')
+            .select('id_verification_data, face_verification_data')
+            .eq('user_email', userEmail)
+            .maybeSingle();
+
+        if (!record) return res.status(404).json({ error: 'No submission for that address' });
+
+        const path = kind === 'selfie'
+            ? record.face_verification_data?.face_photo_path
+            : record.id_verification_data?.id_document_path;
+
+        if (!path) return res.status(404).json({ error: 'Nothing was stored for that' });
+
+        const { data: signed, error } = await supabase.storage
+            .from('govdocs')
+            .createSignedUrl(path, 600);
+
+        if (error) {
+            console.error('Could not sign document URL:', error.message);
+            return res.status(500).json({ error: 'Could not open that document' });
+        }
+
+        res.json({ url: signed.signedUrl, expiresInSeconds: 600 });
+    } catch (error) {
+        console.error('verification-document failed:', error.message);
+        res.status(500).json({ error: 'Could not open that document' });
+    }
+});
+
 app.post('/api/admin/clear-data', async (req, res) => {
     try {
         const { adminKey, tables } = req.body;
@@ -7834,81 +10260,26 @@ app.post('/api/admin/clear-data', async (req, res) => {
 });
 
 // Function to reinitialize Azure clients if they failed initially
-function reinitializeAzureClients() {
-    console.log('🔄 Attempting Azure client reinitialization...');
-    
-    // Force reload config from environment variables
-    const currentConfig = {
-        AZURE_DOCUMENT_INTELLIGENCE_KEY: process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY?.trim(),
-        AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT?.trim(),
-        AZURE_FACE_KEY: process.env.AZURE_FACE_KEY?.trim(),
-        AZURE_FACE_ENDPOINT: process.env.AZURE_FACE_ENDPOINT?.trim()
-    };
-    
-    console.log('🔍 Current environment variables:');
-    console.log('- AZURE_DOCUMENT_INTELLIGENCE_KEY:', currentConfig.AZURE_DOCUMENT_INTELLIGENCE_KEY ? `Present (${currentConfig.AZURE_DOCUMENT_INTELLIGENCE_KEY.substring(0, 10)}...)` : 'MISSING');
-    console.log('- AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT:', currentConfig.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || 'MISSING');
-    console.log('- AZURE_FACE_KEY:', currentConfig.AZURE_FACE_KEY ? `Present (${currentConfig.AZURE_FACE_KEY.substring(0, 10)}...)` : 'MISSING');
-    console.log('- AZURE_FACE_ENDPOINT:', currentConfig.AZURE_FACE_ENDPOINT || 'MISSING');
-    
-    // Update global config with fresh environment variables
-    config.AZURE_DOCUMENT_INTELLIGENCE_KEY = currentConfig.AZURE_DOCUMENT_INTELLIGENCE_KEY;
-    config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT = currentConfig.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT;
-    config.AZURE_FACE_KEY = currentConfig.AZURE_FACE_KEY;
-    config.AZURE_FACE_ENDPOINT = currentConfig.AZURE_FACE_ENDPOINT;
-    
-    // Try to reinitialize Document Intelligence if it's not available
-    if (!documentClient && currentConfig.AZURE_DOCUMENT_INTELLIGENCE_KEY && currentConfig.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT) {
-        try {
-            documentClient = new DocumentAnalysisClient(
-                currentConfig.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT,
-                new AzureKeyCredential(currentConfig.AZURE_DOCUMENT_INTELLIGENCE_KEY)
-            );
-            console.log('✅ Azure Document Analysis reinitialized successfully');
-        } catch (error) {
-            console.log('❌ Azure Document Intelligence reinitialization failed:', error.message);
-            console.log('❌ Full error details:', error);
-        }
-    }
-    
-    // Try to reinitialize Face API if it's not available
-    if (!faceClient && currentConfig.AZURE_FACE_KEY && currentConfig.AZURE_FACE_ENDPOINT) {
-        try {
-            const credentials = new CognitiveServicesCredentials(currentConfig.AZURE_FACE_KEY);
-            faceClient = new FaceClient(credentials, currentConfig.AZURE_FACE_ENDPOINT);
-            console.log('✅ Azure Face API reinitialized successfully');
-        } catch (error) {
-            console.log('❌ Azure Face API reinitialization failed:', error.message);
-            console.log('❌ Full error details:', error);
-        }
-    }
-    
-    // Log final status
-    console.log('🏁 Reinitialization complete:');
-    console.log('- Document Intelligence available:', !!documentClient);
-    console.log('- Face API available:', !!faceClient);
-}
+// Azure is gone. The three callers below are left calling this rather than
+// being torn out one by one, because it is the seam where the checks were
+// swapped and it should stay obvious that nothing is being reinitialised.
+function reinitializeAzureClients() { /* no Azure clients to reinitialise */ }
 
 // API: Check verification services availability
 app.get('/api/verify/service-status', (req, res) => {
-    // Try to reinitialize Azure clients if they're not available
-    reinitializeAzureClients();
-    
-    const status = {
-        documentIntelligence: {
-            available: !!documentClient,
-            configured: !!(config.AZURE_DOCUMENT_INTELLIGENCE_KEY && config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT),
-            message: documentClient ? 'Service is available' : 'Service not configured - Azure Document Intelligence credentials missing'
-        },
-        faceAPI: {
-            available: !!faceClient,
-            configured: !!(config.AZURE_FACE_KEY && config.AZURE_FACE_ENDPOINT),
-            message: faceClient ? 'Service is available' : 'Service not configured - Azure Face API credentials missing'
-        },
-        overallStatus: !!(documentClient && faceClient)
-    };
-    
-    res.json(status);
+    // One checker now: Cloudflare Workers AI. It reports configured/unavailable
+    // honestly rather than claiming a service is "available" when every call to
+    // it fails, which is how a broken Face API went unnoticed for so long.
+    const configured = !!process.env.CLOUDFLARE_ID_WORKER_URL;
+
+    res.json({
+        checker: 'cloudflare-workers-ai',
+        configured,
+        message: configured
+            ? 'ID and selfie checks run on Cloudflare Workers AI'
+            : 'CLOUDFLARE_ID_WORKER_URL is not set, so uploads go straight to manual review',
+        overallStatus: configured
+    });
 });
 
 // API endpoint to serve client-safe configuration
@@ -7924,46 +10295,20 @@ app.get('/api/config', (req, res) => {
         SUPABASE_ANON_KEY: config.SUPABASE_ANON_KEY,
         GOOGLE_OAUTH_CLIENT_ID: config.GOOGLE_OAUTH_CLIENT_ID,
         APPLE_CLIENT_ID: config.APPLE_CLIENT_ID,
+        // Read by the iOS app so the redirect URI lives in one place rather
+        // than being duplicated in Swift and drifting from the server's
+        // allowlist.
+        GOOGLE_NATIVE_REDIRECT_URI: GOOGLE_NATIVE_REDIRECT_URI,
         TURNSTILE_SITE_KEY: config.TURNSTILE_SITE_KEY,
         platforms: PLATFORM_STATUS.platforms,
-        azureServicesAvailable: {
-            documentIntelligence: !!documentClient,
-            faceAPI: !!faceClient
-        }
+        // Was azureServicesAvailable, naming two services that no longer
+        // exist here. Both checks run on Cloudflare Workers AI.
+        verificationChecksAvailable: !!process.env.CLOUDFLARE_ID_WORKER_URL
     };
     
     res.json(configData);
 });
 
-// Debug endpoint to check Azure configuration status
-app.get('/api/debug/azure', blockInProduction, (req, res) => {
-    console.log('🔍 Azure debug endpoint called');
-    
-    // Force reinitialization
-    reinitializeAzureClients();
-    
-    const azureStatus = {
-        environmentVariables: {
-            AZURE_DOCUMENT_INTELLIGENCE_KEY: process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY ? `Present (${process.env.AZURE_DOCUMENT_INTELLIGENCE_KEY.substring(0, 10)}...)` : 'MISSING',
-            AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: process.env.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || 'MISSING',
-            AZURE_FACE_KEY: process.env.AZURE_FACE_KEY ? `Present (${process.env.AZURE_FACE_KEY.substring(0, 10)}...)` : 'MISSING',
-            AZURE_FACE_ENDPOINT: process.env.AZURE_FACE_ENDPOINT || 'MISSING'
-        },
-        configObject: {
-            AZURE_DOCUMENT_INTELLIGENCE_KEY: config.AZURE_DOCUMENT_INTELLIGENCE_KEY ? `Present (${config.AZURE_DOCUMENT_INTELLIGENCE_KEY.substring(0, 10)}...)` : 'MISSING',
-            AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT: config.AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT || 'MISSING',
-            AZURE_FACE_KEY: config.AZURE_FACE_KEY ? `Present (${config.AZURE_FACE_KEY.substring(0, 10)}...)` : 'MISSING',
-            AZURE_FACE_ENDPOINT: config.AZURE_FACE_ENDPOINT || 'MISSING'
-        },
-        clients: {
-            documentClient: !!documentClient,
-            faceClient: !!faceClient
-        },
-        ready: !!documentClient && !!faceClient
-    };
-    
-    res.json(azureStatus);
-});
 
 // Simple route to serve house model images
 app.get('/house-models/:filename', (req, res) => {
@@ -9374,15 +11719,28 @@ function generateSupplyIndicators() {
 
 // API: Get Turnstile site key
 app.get('/api/turnstile-key', (req, res) => {
-    // Use test key if production key looks invalid
-    let siteKey = config.TURNSTILE_SITE_KEY || '1x00000000000000000000AA';
-    
-    // If the key starts with 0x4AAA, it might be invalid - use test key
-    if (siteKey.startsWith('0x4AAA')) {
-        console.log('Using Cloudflare test key for development');
-        siteKey = '1x00000000000000000000AA'; // Always passes test key
+    // The real key, whenever there is one.
+    //
+    // This used to throw it away: any key beginning 0x4AAA was treated as
+    // suspect and swapped for Cloudflare's test key, on the reasoning that it
+    // "might be invalid". Every genuine Turnstile site key begins 0x4AAA, so
+    // the condition matched the real key and only the real key. Password reset
+    // and ID verification therefore ran on 1x00000000000000000000AA, which is
+    // the key documented to pass every challenge without checking anything, and
+    // which draws a "For testing only. If seen, report to site owner" banner
+    // across the widget for every visitor.
+    //
+    // So there was no bot protection on either page, and both said so on screen.
+    const siteKey = config.TURNSTILE_SITE_KEY;
+
+    if (!siteKey) {
+        // Only when none is configured, which is a local checkout rather than
+        // production. Said out loud, because silently serving a key that
+        // accepts everything is how this went unnoticed.
+        console.warn('⚠️ TURNSTILE_SITE_KEY is not set - serving the Cloudflare test key, which accepts every challenge.');
+        return res.json({ siteKey: '1x00000000000000000000AA', testing: true });
     }
-    
+
     res.json({ siteKey });
 });
 
@@ -10045,6 +12403,40 @@ app.get('/api/sublease/interests', async (req, res) => {
 
         await setUserContext(userEmail);
 
+        // Interests recorded directly against a request (the normal path since
+        // express-interest stopped depending on compatibility matching). The
+        // legacy sublease_matches scan below still runs so older interest,
+        // which only ever existed as booleans on a match row, keeps showing.
+        const direct = [];
+        try {
+            const { data: rows } = await supabase
+                .from('sublease_interests')
+                .select('id, request_id, interested_email, conversation_id, created_at')
+                .eq('owner_email', userEmail)
+                .order('created_at', { ascending: false });
+            for (const r of rows || []) {
+                const { data: reqRow } = await supabase
+                    .from('sublease_requests')
+                    .select('title')
+                    .eq('id', r.request_id)
+                    .maybeSingle();
+                direct.push({
+                    match_id: null,
+                    interest_id: r.id,
+                    request_id: r.request_id,
+                    conversation_id: r.conversation_id,
+                    listing_title: reqRow ? reqRow.title : 'Your sublease request',
+                    interested_user_email: r.interested_email,
+                    interested_user_name: String(r.interested_email || '').split('@')[0],
+                    interested_listing_title: null,
+                    match_status: 'interested',
+                    expressed_at: r.created_at
+                });
+            }
+        } catch (e) {
+            console.warn('sublease_interests lookup failed:', e.message);
+        }
+
         const { data: myRequests, error: reqErr } = await supabase
             .from('sublease_requests')
             .select('id, title, type, user_email')
@@ -10056,7 +12448,7 @@ app.get('/api/sublease/interests', async (req, res) => {
         }
 
         if (!myRequests || myRequests.length === 0) {
-            return res.json({ success: true, interests: [] });
+            return res.json({ success: true, interests: direct });
         }
 
         const interests = [];
@@ -10104,8 +12496,14 @@ app.get('/api/sublease/interests', async (req, res) => {
             }
         }
 
-        interests.sort((a, b) => new Date(b.expressed_at || 0) - new Date(a.expressed_at || 0));
-        res.json({ success: true, interests });
+        // Direct interest wins over a legacy match row for the same person and
+        // request, so re-expressed interest is not listed twice.
+        const seen = new Set(direct.map(d => `${d.request_id}|${d.interested_user_email}`));
+        const merged = direct.concat(
+            interests.filter(i => !seen.has(`${i.request_id}|${i.interested_user_email}`))
+        );
+        merged.sort((a, b) => new Date(b.expressed_at || 0) - new Date(a.expressed_at || 0));
+        res.json({ success: true, interests: merged });
 
     } catch (error) {
         console.error('Sublease interests error:', error);
@@ -10125,6 +12523,15 @@ app.post('/api/sublease/express-interest', async (req, res) => {
         await setUserContext(userEmail);
 
         // Browse flow: frontend sends { requestId, userEmail }
+        //
+        // Interest is now recorded as its own fact in `sublease_interests` and a
+        // conversation is opened immediately. The previous implementation went
+        // through the compatibility matcher, which made a deliberate click
+        // dependent on a similarity score: with no opposite-type request of your
+        // own it fabricated a throwaway `Interest in: ...` row carrying only
+        // city/state/rent, which scores exactly 30.00 for a same-city pair —
+        // and the matcher only inserts above 30. Every such click returned
+        // "Could not create match record" and left the junk row behind.
         if (requestId && !matchId) {
             const { data: viewedReq, error: reqErr } = await supabase
                 .from('sublease_requests')
@@ -10137,50 +12544,82 @@ app.post('/api/sublease/express-interest', async (req, res) => {
             if (viewedReq.user_email === userEmail) {
                 return res.status(400).json({ error: 'Cannot express interest on your own request' });
             }
-            const oppositeType = viewedReq.type === 'transfer' ? 'seeking' : 'transfer';
-            let { data: userReq } = await supabase
-                .from('sublease_requests')
-                .select('*')
-                .eq('user_email', userEmail)
-                .eq('type', oppositeType)
-                .eq('status', 'active')
-                .limit(1)
-                .maybeSingle();
-            if (!userReq) {
-                const { data: created, error: createErr } = await supabase
-                    .from('sublease_requests')
+
+            const ownerEmail = viewedReq.user_email;
+
+            // One conversation per (request, interested user), in either
+            // direction — the owner may have written first.
+            const { data: existingConvos } = await supabase
+                .from('conversations')
+                .select('id, sender_email, receiver_email')
+                .eq('listing_id', requestId);
+            let conversation = (existingConvos || []).find(c => {
+                const a = (c.sender_email || '').toLowerCase();
+                const b = (c.receiver_email || '').toLowerCase();
+                const me = userEmail.toLowerCase();
+                const owner = (ownerEmail || '').toLowerCase();
+                return (a === me && b === owner) || (a === owner && b === me);
+            });
+
+            if (!conversation) {
+                const { data: newConvo, error: convoErr } = await supabase
+                    .from('conversations')
                     .insert({
-                        user_email: userEmail,
-                        type: oppositeType,
-                        status: 'active',
-                        title: `Interest in: ${viewedReq.title}`,
-                        city: viewedReq.city,
-                        state: viewedReq.state,
-                        rent_amount: viewedReq.rent_amount,
-                        min_budget: viewedReq.min_budget,
-                        max_budget: viewedReq.max_budget
+                        listing_id: requestId,
+                        sender_email: userEmail,
+                        receiver_email: ownerEmail,
+                        context: 'sublease',
+                        created_at: new Date().toISOString()
                     })
-                    .select()
+                    .select('id')
                     .single();
-                if (createErr) {
-                    return res.status(500).json({ error: 'Could not create interest profile' });
+                if (convoErr) {
+                    console.error('Sublease interest: conversation create failed:', convoErr.message);
+                } else {
+                    conversation = newConvo;
                 }
-                userReq = created;
             }
-            await findAndCreateMatches(viewedReq.id, viewedReq.type);
-            const transferId = viewedReq.type === 'transfer' ? viewedReq.id : userReq.id;
-            const seekingId = viewedReq.type === 'seeking' ? viewedReq.id : userReq.id;
-            const { data: matchRow } = await supabase
-                .from('sublease_matches')
-                .select('id')
-                .eq('transfer_request_id', transferId)
-                .eq('seeking_request_id', seekingId)
-                .maybeSingle();
-            if (!matchRow) {
-                return res.status(500).json({ error: 'Could not create match record' });
+
+            // UNIQUE(request_id, interested_email) makes repeat clicks a no-op
+            // rather than piling up duplicates.
+            const { error: interestErr } = await supabase
+                .from('sublease_interests')
+                .upsert({
+                    request_id: requestId,
+                    interested_email: userEmail,
+                    owner_email: ownerEmail,
+                    conversation_id: conversation ? conversation.id : null
+                }, { onConflict: 'request_id,interested_email' });
+            if (interestErr) {
+                console.error('Sublease interest: upsert failed:', interestErr.message);
+                return res.status(500).json({ error: 'Could not record interest' });
             }
-            matchId = matchRow.id;
-            requestType = oppositeType;
+
+            // Best-effort owner notification; never fail the request over it.
+            try {
+                await supabase.from('ai_chats').insert({
+                    user_email: ownerEmail,
+                    title: 'Sublease Interest',
+                    conversation_data: JSON.stringify([{
+                        role: 'system',
+                        type: 'sublease_interest',
+                        content: `${userEmail} is interested in "${viewedReq.title}"`,
+                        request_id: requestId,
+                        conversation_id: conversation ? conversation.id : null,
+                        created_at: new Date().toISOString()
+                    }])
+                });
+            } catch (notifyErr) {
+                console.warn('Sublease interest notification failed:', notifyErr.message);
+            }
+
+            return res.json({
+                success: true,
+                message: 'Interest sent',
+                conversationId: conversation ? conversation.id : null,
+                ownerEmail,
+                title: viewedReq.title
+            });
         }
 
         if (!matchId || !requestType) {

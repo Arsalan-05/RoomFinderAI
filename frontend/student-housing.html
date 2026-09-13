@@ -1,15 +1,37 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="RoomFinderAI">
+    <meta property="og:title" content="Student housing and rooms near campus — RoomFinderAI">
+    <meta property="og:description" content="Rooms and shared housing for students. Browse by city, message the person renting, and see what the rent should actually be. Free to browse and free to post.">
+    <meta property="og:url" content="https://www.roomfinderai.com/student-housing.html">
+    <meta property="og:image" content="https://www.roomfinderai.com/android-chrome-512x512.png">
+    <meta property="og:locale" content="en_CA">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Student housing and rooms near campus — RoomFinderAI">
+    <meta name="twitter:description" content="Rooms and shared housing for students. Browse by city, message the person renting, and see what the rent should actually be. Free to browse and free to post.">
+    <meta name="twitter:image" content="https://www.roomfinderai.com/android-chrome-512x512.png">
+    <meta name="apple-itunes-app" content="app-id=6802455334">
+    <!-- Student Housing was withdrawn from the site, but this page is still
+     served and is linked from nowhere. Left indexable it would collect
+     search traffic for a feature that no longer exists, and land people
+     on a dead end. Kept reachable by direct link, kept out of search. -->
+    <meta name="robots" content="noindex, follow">
+
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <title>Student Housing Hub - RoomFinderAI</title>
 
     <!-- Scripts and styles -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="js/supabase-config-init.js"></script>
     <script src="universal-auth-protection.js?v=2.0.2"></script>
+    <script src="/js/profiles-client.js?v=20260817"></script>
     <script src="universal-auth-manager.js?v=2.0.1"></script>
     <script src="js/university-search.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -18,7 +40,9 @@
 
     <!-- Unified CSS System - No Inline Styles -->
     <link rel="stylesheet" href="/modules/css/main.css"/>
-    <script src="/js/site-nav.js" defer></script>
+    <script src="/js/site-nav.js?v=20260809e" defer></script>
+    <script src="/js/site-messages.js?v=20260822" defer></script>
+    <script src="/js/site-legal-footer.js?v=20260822" defer></script>
     <script src="/js/site-bootstrap.js" defer></script>
     
 </head>
@@ -257,7 +281,6 @@
             <p class="text-sm">© 2025 RoomFinderAI. All rights reserved.</p>
             <div class="mt-4 flex justify-center space-x-4 flex-wrap">
                 <a href="index.html" class="hover:text-blue-400">Home</a>
-                <a href="student-housing.html" class="hover:text-blue-400">Student Housing</a>
                 <a href="legal.html" class="hover:text-blue-400">Legal Center</a>
                 <a href="ai-negotiator.html" class="hover:text-blue-400">AI Negotiator</a>
                 <a href="roommate-matching.html" class="hover:text-blue-400">RoomPal</a>
@@ -1695,5 +1718,6 @@
             updateBudget();
         });
     </script>
+    <script src="js/app-install-banner.js" defer></script>
 </body>
 </html>

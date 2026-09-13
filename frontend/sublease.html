@@ -1,17 +1,39 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="RoomFinderAI">
+    <meta property="og:title" content="Sublets and short-term rooms — RoomFinderAI">
+    <meta property="og:description" content="Short-term sublets and rooms with dates and budgets. Browse who is subletting, or post your own. Free to browse and free to post.">
+    <meta property="og:url" content="https://www.roomfinderai.com/sublease.html">
+    <meta property="og:image" content="https://www.roomfinderai.com/android-chrome-512x512.png">
+    <meta property="og:locale" content="en_CA">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="Sublets and short-term rooms — RoomFinderAI">
+    <meta name="twitter:description" content="Short-term sublets and rooms with dates and budgets. Browse who is subletting, or post your own. Free to browse and free to post.">
+    <meta name="twitter:image" content="https://www.roomfinderai.com/android-chrome-512x512.png">
+    <meta name="apple-itunes-app" content="app-id=6802455334">
+    <script async src="https://pagead2.googlesyndication.com/pagead/js/adsbygoogle.js?client=ca-pub-3388740864153708"
+         crossorigin="anonymous"></script>
+
+    <link rel="canonical" href="https://www.roomfinderai.com/sublease.html">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <title>Sublease Marketplace - RoomFinderAI</title>
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
     <script src="js/supabase-config-init.js"></script>
+    <script src="/js/profiles-client.js?v=20260817"></script>
     <script src="universal-auth-manager.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/modules/css/main.css"/>
-    <script src="/js/site-nav.js" defer></script>
+    <script src="/js/site-nav.js?v=20260809e" defer></script>
+    <script src="/js/site-messages.js?v=20260822" defer></script>
+    <script src="/js/site-legal-footer.js?v=20260822" defer></script>
     <script src="/js/site-bootstrap.js" defer></script>
 </head>
 <body class="bg-white min-h-screen site-has-header">
@@ -110,7 +132,27 @@
                 <div id="interestsReceived" class="space-y-4"></div>
             </section>
         </div>
-    </main>
+            <div id="chatModal" class="chat-modal">
+            <div class="chat-modal-content">
+                <div class="chat-header">
+                    <h2 id="chatTitle">Chat</h2>
+                    <span class="close-button chat-close-button">×</span>
+                </div>
+                <div id="chatMessages" class="chat-messages"></div>
+                <div class="chat-input-container flex-col gap-2">
+                    <div class="flex items-end gap-2 w-full">
+                        <textarea id="chatInput" class="chat-input flex-1 min-w-0" rows="2" placeholder="Type your message..."></textarea>
+                        <input type="file" id="fileInput" class="hidden" accept=".pdf,.doc,.docx,.jpg,.jpeg,.png,.txt" multiple>
+                        <button type="button" id="fileUploadBtn" class="bg-gray-500 text-white px-3 py-2 rounded hover:bg-gray-600 transition text-sm flex-shrink-0 hidden" onclick="document.getElementById('fileInput').click()" title="Attach file">
+                            📎
+                        </button>
+                        <button type="button" id="chatSendBtn" class="chat-send-btn flex-shrink-0">Send</button>
+                    </div>
+                    <div id="selectedFiles" class="w-full space-y-1 hidden"></div>
+                </div>
+            </div>
+
+</main>
 
     <script>
         let userEmail = null;
@@ -141,8 +183,13 @@
             if (name === 'interests') loadInterestsReceived();
         }
 
+        // Keeps the owner email and title for each rendered card, so expressing
+        // interest can open a chat without another round trip.
+        const subleaseCache = {};
+
         function renderCards(requests, containerId, showActions = false) {
             const el = document.getElementById(containerId);
+            requests.forEach((r) => { subleaseCache[r.id] = r; });
             if (!requests.length) {
                 el.innerHTML = '<p class="text-gray-500 text-center py-12">No sublease requests found.</p>';
                 return;
@@ -263,7 +310,19 @@
                 });
                 const data = await res.json();
                 if (!res.ok) throw new Error(data.error || 'Failed');
-                showBanner('success', 'Interest sent! The poster has been notified.');
+                showBanner('success', 'Interest sent. Opening a chat with them...');
+
+                // Interest alone is a dead end — open the conversation so the
+                // user can actually say something while they have momentum.
+                const card = subleaseCache[requestId];
+                if (window.subleaseChat && card) {
+                    await window.subleaseChat.startConversation({
+                        id: requestId,
+                        user_email: data.ownerEmail || card.user_email,
+                        title: data.title || card.title,
+                        context: 'sublease'
+                    });
+                }
             } catch (err) {
                 if (err.message !== 'Not logged in') showBanner('error', err.message);
             }
@@ -326,12 +385,19 @@
 
         document.addEventListener('DOMContentLoaded', async () => {
             if (typeof UniversalAuth !== 'undefined') {
-                UniversalAuth.init({ allowAnonymous: false, requireSupabase: true });
+                // allowAnonymous, because this page already handles the logged
+                // out case itself — see the prompt built below. With it false,
+                // init() redirected straight to login.html and that prompt was
+                // unreachable code: a visitor tapping Sublease was thrown at a
+                // login form having never seen what the page is for.
+                UniversalAuth.init({ allowAnonymous: true, requireSupabase: true });
                 const user = await UniversalAuth.getCurrentUser();
                 if (user?.email) {
                     userEmail = user.email;
-                    document.getElementById('authLink').textContent = 'Profile';
-                    document.getElementById('authLink').href = 'profile.html';
+                    // #authLink does not exist on this page — the shared nav owns
+                    // the auth UI now. Calling .textContent on null threw here,
+                    // before searchSubleases() below ever ran, which is why the
+                    // Browse panel was empty until you clicked the tab.
                     searchSubleases();
                     return;
                 }
@@ -344,5 +410,23 @@
                 + '</div>';
         });
     </script>
+    <script type="module" src="/chat-system.js?v=20260820-live-messages"></script>
+    <script>
+        // Reuse the shared chat rather than duplicating the ~1500 inline lines
+        // listings.html carries. supabase-config-init.js already exposes an
+        // awaitable client, so no polling loop is needed here.
+        (async function () {
+            try {
+                const client = await (window.supabaseConfigReady || Promise.resolve(window.supabaseClient));
+                if (!client || !window.ChatSystem) return;
+                window.subleaseChat = new window.ChatSystem();
+                await window.subleaseChat.initialize(client);
+                console.log('Sublease chat ready');
+            } catch (e) {
+                console.warn('Sublease chat unavailable:', e.message);
+            }
+        })();
+    </script>
+    <script src="js/app-install-banner.js" defer></script>
 </body>
 </html>

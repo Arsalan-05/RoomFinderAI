@@ -1,18 +1,23 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <meta name="apple-itunes-app" content="app-id=6802455334">
+    <meta name="robots" content="noindex, follow">
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <link rel="icon" type="image/svg+xml" href="favicon.svg">
+    <link rel="icon" href="/favicon.ico" sizes="any">
+    <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
+    <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
     <title>Platform Status - RoomFinderAI</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="css/global-styles.css">
-    <link rel="stylesheet" href="css/platform-status.css">
     <style>
         body { font-family: 'Inter', sans-serif; background: #f8fafc; }
         .status-active { background: #dcfce7; color: #166534; }
         .status-closed { background: #fee2e2; color: #991b1b; }
+        .status-preparing { background: #e0e7ff; color: #3730a3; }
     </style>
 </head>
 <body class="min-h-screen">
@@ -26,11 +31,11 @@
     <main class="max-w-4xl mx-auto px-4 py-10">
         <div class="bg-indigo-600 text-white rounded-2xl p-8 mb-8 shadow-lg">
             <p class="text-indigo-200 text-sm font-semibold uppercase tracking-wide mb-2">Platform update</p>
-            <h1 class="text-3xl font-bold mb-3">Web only — mobile apps temporarily closed</h1>
+            <h1 class="text-3xl font-bold mb-3">Web is live, iOS is on the way</h1>
             <p class="text-indigo-100 text-lg leading-relaxed">
-                RoomFinderAI is currently available on the <strong class="text-white">web</strong> only.
-                Our native <strong class="text-white">Android</strong> and <strong class="text-white">iOS</strong> apps are
-                paused while we improve stability and bring features up to parity with the website.
+                RoomFinderAI runs on the <strong class="text-white">web</strong> today. The
+                <strong class="text-white">iOS</strong> app is being prepared for the App Store and carries every
+                feature the website has. The <strong class="text-white">Android</strong> app remains closed.
             </p>
         </div>
 
@@ -45,25 +50,33 @@
             <div class="bg-white rounded-xl border border-gray-200 p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                     <h2 class="text-lg font-semibold text-gray-900">Android</h2>
-                    <p class="text-gray-600 text-sm mt-1">Not on Google Play. Do not install old APK files.</p>
+                    <p class="text-gray-600 text-sm mt-1">
+                        Live on Google Play &mdash;
+                        <a href="https://play.google.com/store/apps/details?id=com.roomfinderai.android&amp;referrer=utm_source%3Dsite%26utm_medium%3Dplatform_status" class="text-indigo-600 underline">download RoomFinderAI</a>.
+                        Only install from Google Play, never from an APK file sent to you.
+                    </p>
                 </div>
-                <span class="status-closed text-sm font-semibold px-3 py-1 rounded-full self-start">Closed</span>
+                <span class="status-active text-sm font-semibold px-3 py-1 rounded-full self-start">Live</span>
             </div>
             <div class="bg-white rounded-xl border border-gray-200 p-6 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
                 <div>
                     <h2 class="text-lg font-semibold text-gray-900">iOS</h2>
-                    <p class="text-gray-600 text-sm mt-1">Not on the App Store or TestFlight.</p>
+                    <p class="text-gray-600 text-sm mt-1">
+                        Live on the App Store &mdash;
+                        <a href="https://apps.apple.com/ca/app/roomfinderai/id6802455334" class="text-indigo-600 underline">download RoomFinderAI</a>.
+                    </p>
                 </div>
-                <span class="status-closed text-sm font-semibold px-3 py-1 rounded-full self-start">Closed</span>
+                <span class="status-active text-sm font-semibold px-3 py-1 rounded-full self-start">Live</span>
             </div>
         </div>
 
         <section class="bg-white rounded-xl border border-gray-200 p-6 mb-8">
             <h2 class="text-xl font-semibold text-gray-900 mb-3">What you should do</h2>
             <ul class="list-disc list-inside space-y-2 text-gray-700">
-                <li>Use <a href="index.html" class="text-indigo-600 underline">roomfinderai.com</a> in your browser (works on phones too).</li>
-                <li>Uninstall any unofficial RoomFinderAI APK if you have one.</li>
-                <li>Check back here or on our homepage for updates when mobile apps return.</li>
+                <li><strong>Android:</strong> install from <a href="https://play.google.com/store/apps/details?id=com.roomfinderai.android&amp;referrer=utm_source%3Dsite%26utm_medium%3Dplatform_status" class="text-indigo-600 underline">Google Play</a>.</li>
+                <li><strong>iPhone:</strong> install from the <a href="https://apps.apple.com/ca/app/roomfinderai/id6802455334" class="text-indigo-600 underline">App Store</a>.</li>
+                <li>Prefer the browser? <a href="index.html" class="text-indigo-600 underline">roomfinderai.com</a> is the full app too.</li>
+                <li>Only install from Google Play or the App Store. Never from an APK someone sends you.</li>
             </ul>
         </section>
 
@@ -81,7 +94,11 @@
     </main>
 
     <footer class="bg-gray-900 text-gray-400 text-center py-6 mt-12 text-sm">
-        <p>&copy; 2025 RoomFinderAI. Web platform active · Mobile apps temporarily closed.</p>
+        <p>&copy; 2025 RoomFinderAI. Web platform active · iOS app coming soon.</p>
     </footer>
+    <script src="/js/site-bootstrap.js" defer></script>
+    <script src="/js/site-nav.js?v=20260809e"></script>
+    <script src="/js/site-messages.js?v=20260822" defer></script>
+    <script src="/js/site-legal-footer.js?v=20260822" defer></script>
 </body>
 </html>

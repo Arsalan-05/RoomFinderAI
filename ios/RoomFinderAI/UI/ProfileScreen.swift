@@ -1,0 +1,242 @@
+import SwiftUI
+
+/// The account, natively.
+///
+/// The last web-backed tab. It held sign-in, verification, your listings and
+/// deleting your account, all inside profile.html — which meant the app could
+/// not tell whether any of it had worked, and nothing on this tab could be
+/// reached by VoiceOver or by the automation used to test the rest.
+struct ProfileScreen: View {
+
+    @EnvironmentObject private var state: AppState
+    @ObservedObject private var auth = AuthService.shared
+
+    @StateObject private var verification = VerificationService()
+    @StateObject private var mine = MyListingsService()
+
+    @State private var showingVerification = false
+    @State private var showingDelete = false
+    @State private var showingEditName = false
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if auth.isSignedIn {
+                    account
+                } else {
+                    AuthScreen()
+                }
+            }
+            .navigationTitle(auth.isSignedIn ? "Profile" : "Account")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { MoreMenu() }
+            }
+            .navigationDestination(for: Listing.self) { ListingDetailScreen(listing: $0) }
+        }
+        .task(id: auth.profile?.email) {
+            guard auth.isSignedIn else { return }
+            await auth.refresh()
+            await verification.loadStatus()
+            mine.load()
+        }
+    }
+
+    private var account: some View {
+        List {
+            Section { identity }
+
+            Section {
+                Button {
+                    showingVerification = true
+                } label: {
+                    HStack {
+                        Label("Verify your account", systemImage: "checkmark.seal")
+                        Spacer()
+                        verificationBadge
+                    }
+                }
+                .disabled(verification.stage == .verified || verification.stage == .pending)
+
+                Button {
+                    showingEditName = true
+                } label: {
+                    Label("Edit your name", systemImage: "person.text.rectangle")
+                }
+
+                Button {
+                    state.showingSaved = true
+                } label: {
+                    Label("Saved rooms", systemImage: "heart")
+                }
+
+                // The block list had no screen at all, so a block could not be
+                // seen, checked or undone once it was made.
+                NavigationLink {
+                    BlockedPeopleScreen()
+                } label: {
+                    Label("Blocked people", systemImage: "hand.raised")
+                }
+            } footer: {
+                if case .rejected(let why) = verification.stage {
+                    Text(why).foregroundStyle(.red)
+                } else if verification.stage == .pending {
+                    Text("We're reviewing what you sent. This usually takes a day.")
+                }
+            }
+
+            listingsSection
+
+            Section {
+                Button(role: .destructive) {
+                    auth.signOut()
+                    Haptics.impact(.light)
+                } label: {
+                    Label("Sign out", systemImage: "rectangle.portrait.and.arrow.right")
+                }
+
+                Button(role: .destructive) {
+                    showingDelete = true
+                } label: {
+                    Label("Delete my account", systemImage: "trash")
+                }
+            } footer: {
+                // Guideline 5.1.1(v): an account made in the app has to be
+                // deletable in the app, not only on a website.
+                Text("Deleting removes your account, your listings and your saved rooms for good.")
+            }
+        }
+        .refreshable {
+            await auth.refresh()
+            await verification.loadStatus()
+            mine.load()
+        }
+        .sheet(isPresented: $showingVerification) {
+            VerificationScreen(service: verification)
+        }
+        .sheet(isPresented: $showingEditName) {
+            EditNameScreen()
+        }
+        .sheet(isPresented: $showingDelete) {
+            DeleteAccountScreen()
+        }
+    }
+
+    private var identity: some View {
+        HStack(spacing: 14) {
+            avatar
+
+            VStack(alignment: .leading, spacing: 3) {
+                // Without a name this used to print the address as the heading
+                // and again underneath it, so the one line was the email
+                // wrapped mid-word and the other was the same email. Say what
+                // is missing instead, since it is a thing they can fix.
+                if auth.profile?.hasName == true {
+                    Text(auth.profile?.displayName ?? "")
+                        .font(.headline)
+                } else {
+                    Button {
+                        showingEditName = true
+                    } label: {
+                        Text("Add your name")
+                            .font(.headline)
+                            .foregroundStyle(Theme.brand)
+                    }
+                }
+
+                Text(auth.profile?.email ?? "")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+
+            Spacer()
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var avatar: some View {
+        let initials = auth.profile?.initials ?? "?"
+
+        if let path = auth.profile?.profileImage, let url = URL(string: path) {
+            AsyncImage(url: url) { image in
+                image.resizable().scaledToFill()
+            } placeholder: {
+                initialsCircle(initials)
+            }
+            .frame(width: 58, height: 58)
+            .clipShape(Circle())
+        } else {
+            initialsCircle(initials)
+        }
+    }
+
+    private func initialsCircle(_ initials: String) -> some View {
+        Text(initials)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(Theme.brand)
+            .frame(width: 58, height: 58)
+            .background(Circle().fill(Theme.brand.opacity(0.14)))
+    }
+
+    @ViewBuilder
+    private var verificationBadge: some View {
+        switch verification.stage {
+        case .verified:
+            Label("Verified", systemImage: "checkmark.seal.fill")
+                .labelStyle(.titleAndIcon)
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.green)
+        case .pending:
+            Text("In review").font(.caption).foregroundStyle(.secondary)
+        case .rejected:
+            Text("Try again").font(.caption).foregroundStyle(.red)
+        case .notStarted, .unknown:
+            Text("Not verified").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    // planDescription and the Plan section were removed for 1.0.
+    //
+    // The app showed "Pro" for anyone who had subscribed on the website, and
+    // offered an upgrade the App Store could not sell — the subscription sits
+    // at MISSING_METADATA until the Paid Apps Agreement is active, which is
+    // waiting on a Canadian GST/HST number that does not exist yet. Showing a
+    // paid tier the app can neither sell nor honour is what Apple asked about
+    // under guideline 2.1(b). It comes back in 1.1, as a real In-App Purchase.
+
+    @ViewBuilder
+    private var listingsSection: some View {
+        Section {
+            if mine.isLoading && mine.listings.isEmpty {
+                HStack { ProgressView(); Text("Loading").foregroundStyle(.secondary) }
+            } else if mine.listings.isEmpty {
+                Text("You haven't posted a room yet.")
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(mine.listings) { listing in
+                    NavigationLink(value: listing) {
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(listing.title).lineLimit(1)
+                            Text(listing.priceText)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .onDelete { offsets in
+                    Task { await mine.delete(at: offsets) }
+                }
+            }
+        } header: {
+            Text("Your listings")
+        } footer: {
+            if !mine.listings.isEmpty {
+                Text("Swipe a listing to delete it.")
+            }
+        }
+    }
+}

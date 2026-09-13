@@ -23,6 +23,9 @@ class AIChatHandler {
         
         // Track active conversation contexts
         this.activeConversations = new Map();
+        /// Ids already drawn in this page, so a message can be recognised
+        /// rather than guessed at from who sent it.
+        this.renderedMessageIds = new Set();
         this.pendingUserResponse = null;
 
         // Requirements collection state - must collect ALL before searching
@@ -65,7 +68,7 @@ class AIChatHandler {
 
     // Show welcome message with quick start chips
     showWelcomeWithChips() {
-        const chatMessages = document.getElementById('chatMessages');
+        const chatMessages = this.getChatContainer();
         if (!chatMessages) return;
 
         chatMessages.innerHTML = `
@@ -169,9 +172,14 @@ class AIChatHandler {
                     try {
                         const newMessage = payload.new;
 
-                        // Skip messages sent by the current user
-                        if (newMessage.sender_email === this.currentUser.email) {
-                            console.log('📭 Own message, skipping');
+                        // Not skipped for being "ours" any more.
+                        //
+                        // The AI negotiator sends under the tenant's own
+                        // address, so dropping every message from the current
+                        // user threw away the negotiator's replies — the whole
+                        // reason the page had to be reloaded to see them.
+                        // What matters is whether it is already on screen.
+                        if (newMessage.id && this.renderedMessageIds.has(newMessage.id)) {
                             return;
                         }
 
@@ -208,24 +216,74 @@ class AIChatHandler {
                 .subscribe();
 
             console.log('✅ messages subscription established');
+            this.startConversationPolling();
 
         } catch (error) {
             console.error('❌ Failed to setup real-time subscriptions:', error);
         }
     }
 
+    /**
+     * Reads the open thread on a timer as well as over the socket.
+     *
+     * Realtime was the only thing bringing new messages to this page, so when
+     * it did not fire the negotiation simply looked frozen and the only way to
+     * see what the landlord said was to reload. A chat that has to be refreshed
+     * is not a chat.
+     */
+    startConversationPolling() {
+        if (this._conversationPoll) clearInterval(this._conversationPoll);
+
+        this._conversationPoll = setInterval(async () => {
+            const conversationId = this.activeConversationId;
+            if (!conversationId || !this.supabase) return;
+            if (typeof document !== 'undefined' && document.hidden) return;
+            if (this._pollInFlight) return;
+
+            this._pollInFlight = true;
+            try {
+                const { data, error } = await this.supabase
+                    .from('messages')
+                    .select('id, conversation_id, sender_email, content, created_at')
+                    .eq('conversation_id', conversationId)
+                    .order('created_at', { ascending: false })
+                    .limit(8);
+
+                if (error || !data) return;
+
+                // Oldest first, so a burst arrives in the order it was written.
+                for (const message of data.slice().reverse()) {
+                    if (this.renderedMessageIds.has(message.id)) continue;
+                    this.displayIncomingMessage(message, { id: conversationId });
+                }
+            } catch (e) {
+                // The next tick is five seconds away; nothing worth saying.
+            } finally {
+                this._pollInFlight = false;
+            }
+        }, 5000);
+    }
+
     // Display incoming message from messages table
     displayIncomingMessage(message, conversation) {
+        if (message?.id) {
+            if (this.renderedMessageIds.has(message.id)) return;
+            this.renderedMessageIds.add(message.id);
+        }
         try {
-            // Determine the sender label
-            let senderLabel = 'Tenant';
-            if (message.sender_email.includes('ai-negotiator')) {
-                senderLabel = 'AI Negotiator';
-            } else if (message.sender_email === conversation.receiver_email) {
-                senderLabel = 'Tenant';
-            } else if (message.sender_email === conversation.sender_email) {
-                senderLabel = 'Tenant';
-            }
+            // Who actually sent this?
+            //
+            // The previous version compared against conversation.sender_email
+            // and conversation.receiver_email but assigned 'Tenant' in EVERY
+            // branch, so the landlord's own messages were captioned "Tenant".
+            // The only thing that decides sides is whether the sender is us:
+            // our own address, or the AI acting on our behalf.
+            const from = String(message.sender_email || '').toLowerCase();
+            const me = String(this.currentUser?.email || '').toLowerCase();
+            const isAi = from.includes('ai-negotiator');
+            const isMine = !!(me && from === me);
+
+            let senderLabel = isAi ? 'AI Negotiator' : (isMine ? 'You' : 'Landlord');
 
             // Check if this is an AI message on behalf of tenant.
             // Detect both the new footer format ("— Sent via RoomFinder AI")
@@ -238,7 +296,11 @@ class AIChatHandler {
                 senderLabel = 'AI Negotiator';
             }
 
-            this.appendMessage(senderLabel, message.content || 'New message received', 'left');
+            // Only what the tenant typed themselves sits on the right. The AI
+            // Negotiator is an assistant speaking on their behalf, not the
+            // tenant, so its messages belong on the left with the landlord's —
+            // rendering them right made the AI's words look like the user's own.
+            this.appendMessage(senderLabel, message.content || 'New message received', isMine ? 'right' : 'left');
 
             // Play notification sound if available
             this.playNotificationSound();
@@ -249,25 +311,47 @@ class AIChatHandler {
         }
     }
 
-    // Play notification sound
+    // Play notification sound — a soft two-note chime.
+    //
+    // The old version was a bare 800Hz sine switched on and off after 100ms.
+    // With no fade at either end the waveform is cut mid-cycle, and that
+    // discontinuity is heard as a click, which is what made it sound cheap.
+    // Two things fix it: an envelope (quick fade in, gentle exponential decay)
+    // and a second note a musical fourth above the first, so it reads as a
+    // chime rather than an alarm.
+    //
+    // The context is created once and reused. Browsers cap the number of live
+    // AudioContexts (~6); the old code built a new one per notification, so
+    // after a handful of messages the sound stopped working entirely.
     playNotificationSound() {
         try {
-            // Create a simple notification sound
-            const audioContext = new (window.AudioContext || window.webkitAudioContext)();
-            const oscillator = audioContext.createOscillator();
-            const gainNode = audioContext.createGain();
+            const Ctx = window.AudioContext || window.webkitAudioContext;
+            if (!Ctx) return;
+            if (!this._audioCtx) this._audioCtx = new Ctx();
+            const ctx = this._audioCtx;
+            // Autoplay policy can leave the context suspended until a gesture.
+            if (ctx.state === 'suspended') ctx.resume().catch(() => {});
 
-            oscillator.connect(gainNode);
-            gainNode.connect(audioContext.destination);
+            const now = ctx.currentTime;
+            // G5 then C6 — a rising fourth, warm rather than urgent.
+            [{ hz: 784.0, at: 0 }, { hz: 1046.5, at: 0.085 }].forEach(({ hz, at }) => {
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = 'triangle';           // softer harmonics than a sine's bare tone
+                osc.frequency.setValueAtTime(hz, now + at);
 
-            oscillator.frequency.value = 800;
-            oscillator.type = 'sine';
-            gainNode.gain.value = 0.1;
+                const start = now + at;
+                gain.gain.setValueAtTime(0.0001, start);
+                gain.gain.exponentialRampToValueAtTime(0.09, start + 0.012);   // fast attack
+                gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.38);  // long tail
 
-            oscillator.start();
-            oscillator.stop(audioContext.currentTime + 0.1);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start(start);
+                osc.stop(start + 0.4);
+            });
         } catch (error) {
-            // Audio not supported, ignore
+            // Audio unavailable — never let a sound break message handling.
         }
     }
 
@@ -303,13 +387,10 @@ class AIChatHandler {
         }
 
         try {
-            const { data: profile, error } = await this.supabase
-                .from('profiles')
-                .select('*')
-                .eq('email', this.currentUser.email)
-                .single();
+            // Via the server; the browser key no longer reads this table.
+            const profile = await window.RoomFinderProfiles?.getMyProfile(this.currentUser.email);
 
-            if (error) {
+            if (!profile) {
                 console.log('⚠️ Profile not found for anonymous user');
                 return false;
             }
@@ -362,6 +443,9 @@ class AIChatHandler {
 
         // Store user message
         this.appendMessage('You', message, 'right');
+        // Drawn optimistically. The insert comes back on the socket and on the
+        // poll, and both need to know it is already here.
+        if (this._lastSentContent !== undefined) this._lastSentContent = message;
         this.conversationHistory.push({ role: 'user', content: message });
         this.saveConversationHistory();
 
@@ -799,7 +883,7 @@ class AIChatHandler {
         };
     }
 
-    filterListingsByNeeds(listings, needs, { excludeOwnEmail = true, relaxPricePct = 0 } = {}) {
+    filterListingsByNeeds(listings, needs, { excludeOwnEmail = true, relaxPricePct = 0, ignoreType = false } = {}) {
         let results = listings || [];
         const ownEmail = (excludeOwnEmail && this.currentUser?.email || '').toLowerCase();
         if (ownEmail) {
@@ -812,9 +896,32 @@ class AIChatHandler {
                 return hay.includes(loc);
             });
         }
-        if (needs?.houseType) {
-            const type = needs.houseType.toLowerCase();
-            results = results.filter(l => (l.house_type || '').toLowerCase() === type);
+        if (needs?.houseType && !ignoreType) {
+            // Exact equality was too brutal: asking for a "room" matched nothing
+            // because every listing is typed Apartment/Condo/House, so a real
+            // Los Angeles listing was reported as "no matching listings in the
+            // database". Match either direction, and treat the room-ish words as
+            // satisfied by any self-contained home too — you can rent a room in
+            // an apartment.
+            const type = needs.houseType.toLowerCase().trim();
+            const stocked = new Set(
+                listings.map(l => (l.house_type || '').toLowerCase().trim()).filter(Boolean)
+            );
+            // Only filter by type when we actually stock that type. Listings are
+            // only ever typed Apartment / House / Condo / Townhouse, so words
+            // people genuinely use — "room", "flat", "place", "unit", "studio",
+            // "basement" — matched nothing and zeroed the results. A type we
+            // don't stock is a vocabulary mismatch, not a real constraint.
+            const isStockedType = [...stocked].some(s => s === type || s.includes(type) || type.includes(s));
+            if (isStockedType) {
+                results = results.filter(l => {
+                    const have = (l.house_type || '').toLowerCase().trim();
+                    if (!have) return true;                   // untyped listing: don't exclude
+                    return have === type || have.includes(type) || type.includes(have);
+                });
+            } else {
+                console.log(`ℹ️ Ignoring property type "${type}" — no listings use it, so it would exclude everything.`);
+            }
         }
         if (needs?.maxPrice) {
             const maxP = relaxPricePct > 0
@@ -985,7 +1092,10 @@ class AIChatHandler {
         
         listings.slice(0, 5).forEach((listing) => {
             const titleText = listing.title || 'Untitled Property';
-            const cityText = listing.city || 'City not specified';
+            // /api/listings ships the city under `location` (transformListingForAndroid
+            // maps city -> location), so reading only .city showed
+            // "City not specified" for every listing that came from the API.
+            const cityText = listing.city || listing.location || 'City not specified';
             const streetText = listing.street ? ` - ${listing.street}` : '';
             const priceText = listing.price ? `$${listing.price}` : 'Price not listed';
             const typeText = listing.house_type || 'Type not specified';
@@ -1024,7 +1134,8 @@ class AIChatHandler {
             return;
         }
 
-        this.appendMessage('AI', `📧 Initiating contact with landlord for listing ${listingId}...`, 'left');
+        // Was: "Initiating contact with landlord for listing <uuid>" — an internal
+        // id the tenant has no use for. The next line already says what's happening.
 
         // Use the proper method to start negotiation
         this.startNegotiationForListing(listing);
@@ -1115,7 +1226,10 @@ class AIChatHandler {
         for (let i = 0; i < listingsToShow.length; i++) {
             const listing = listingsToShow[i];
             const titleText = listing.title || 'Untitled Property';
-            const cityText = listing.city || 'City not specified';
+            // /api/listings ships the city under `location` (transformListingForAndroid
+            // maps city -> location), so reading only .city showed
+            // "City not specified" for every listing that came from the API.
+            const cityText = listing.city || listing.location || 'City not specified';
             const priceText = listing.price ? `$${listing.price}/month` : 'Price not listed';
             const bedroomText = listing.bedrooms ? `${listing.bedrooms}BR` : '';
             const typeText = listing.house_type || '';
@@ -1148,7 +1262,8 @@ class AIChatHandler {
             this.appendMessage('AI', `📌 Note: ${ct} of your own listing${ct > 1 ? 's' : ''} also matched and ${ct > 1 ? 'were' : 'was'} hidden (you can't negotiate with yourself).`, 'left');
         }
 
-        this.appendMessage('AI', 'Click "View Details" on any listing to see more information.', 'left');
+        // The cards carry a visible "View Details" button — a separate line
+        // telling people to click it is one more message for no new information.
         this.listingSelectionMode = true;
         this.pendingUserResponse = 'listing_selection';
         this.negotiationState = 'awaiting_selection';
@@ -1197,17 +1312,20 @@ class AIChatHandler {
             const ownPrice = own.price ? ` ($${own.price}/mo)` : '';
             const otherN = ct - 1;
             const others = otherN > 0 ? ` (and ${otherN} other${otherN > 1 ? 's' : ''})` : '';
-            this.appendMessage('AI', `📌 Your own listing **"${ownTitle}"**${ownPrice}${others} matches your search — but it's hidden here because you can't negotiate with yourself.`, 'left');
+            this.appendMessage('AI', `📌 Your own listing **"${ownTitle}"**${ownPrice}${others} matches your search, but it's hidden here because you can't negotiate with yourself.`, 'left');
             this.appendMessage('AI', `💡 To work with it, search from a different account, or open it directly from your dashboard / My Listings.`, 'left');
             this.negotiationState = 'idle';
             return;
         }
 
-        // No own-listing match either. Try similar listings via API with relaxed price.
+        // No own-listing match either. Try similar listings via API with relaxed
+        // price AND no property-type filter — this is the "close enough" pass,
+        // and keeping the type filter here is what made a real Los Angeles
+        // listing invisible when the search was typed as "room".
         let similarListings = [];
         try {
             const allListings = await this.fetchListingsFromApi();
-            similarListings = this.filterListingsByNeeds(allListings, this.userNeeds, { relaxPricePct: 0.2 })
+            similarListings = this.filterListingsByNeeds(allListings, this.userNeeds, { relaxPricePct: 0.2, ignoreType: true })
                 .sort((a, b) => new Date(b.updated_at || b.created_at || 0) - new Date(a.updated_at || a.created_at || 0))
                 .slice(0, 10);
         } catch (e) {
@@ -1225,7 +1343,10 @@ class AIChatHandler {
             let shownCount = 0;
             for (const listing of similarListings.slice(0, 5)) {
                 const titleText = listing.title || 'Untitled Property';
-                const cityText = listing.city || 'City not specified';
+                // /api/listings ships the city under `location` (transformListingForAndroid
+            // maps city -> location), so reading only .city showed
+            // "City not specified" for every listing that came from the API.
+            const cityText = listing.city || listing.location || 'City not specified';
                 const streetText = listing.street ? ` - ${listing.street}` : '';
                 const priceText = listing.price ? ` - $${listing.price}` : '';
                 const typeText = listing.house_type ? ` (${listing.house_type})` : '';
@@ -1241,10 +1362,45 @@ class AIChatHandler {
                 this.appendMessage('AI', `💡 Suggestions: ${suggestions.join(' or ')}.`, 'left');
             }
         } else {
-            this.appendMessage('AI', 'No matching listings in the database — try a different city, a higher budget, or a different property type.', 'left');
+            this.appendMessage('AI', 'No matching listings in the database, try a different city, a higher budget, or a different property type.', 'left');
         }
 
         this.negotiationState = 'idle';
+    }
+
+    /**
+     * The listing number the tenant picked, or null if this message is not a
+     * pick at all.
+     *
+     * Only two shapes count: a bare number ("2", "#2"), or an explicit pick
+     * phrase ("view 2", "show me number 2", "the first one"). The number must
+     * also be inside the range we actually offered — "I can do 1800" names a
+     * price, not a listing, and must reach the search instead of being answered
+     * with "Invalid selection".
+     */
+    parseListingPick(cleanMessage) {
+        const count = Math.min(this.matchingListings?.length || 0, 5);
+        if (!count) return null;
+
+        const inRange = n => (Number.isInteger(n) && n >= 1 && n <= count ? n : null);
+
+        // "2", "#2", "2." — the whole message is the number.
+        const bare = cleanMessage.match(/^#?\s*(\d{1,2})\s*[.)]?$/);
+        if (bare) return inRange(parseInt(bare[1], 10));
+
+        // "view 2", "open #2", "listing 2", "number 2", "let's see 2"
+        const phrase = cleanMessage.match(
+            /\b(?:view|see|open|show|check|pick|choose|select|listing|option|number|no\.?|#)\s*#?\s*(\d{1,2})\b/
+        );
+        if (phrase) return inRange(parseInt(phrase[1], 10));
+
+        // "the first one", "second one please"
+        const words = { first: 1, second: 2, third: 3, fourth: 4, fifth: 5 };
+        for (const [word, n] of Object.entries(words)) {
+            if (new RegExp(`\\b${word}\\b`).test(cleanMessage)) return inRange(n);
+        }
+
+        return null;
     }
 
     // Check if the message is a response to pending questions (listing selection, contact, etc.)
@@ -1260,10 +1416,15 @@ class AIChatHandler {
 
         // Handle listing selection (user says "1", "2", "view 2", etc.)
         if (this.pendingUserResponse === 'listing_selection') {
-            // Check for number in message
-            const numberMatch = cleanMessage.match(/(\d+)/);
-            if (numberMatch) {
-                const listingNum = parseInt(numberMatch[1]);
+            // Only a message that IS a pick counts as one. Matching any digit
+            // anywhere meant "my budget is 2100" was read as "view listing
+            // 2100" and answered with "Invalid selection" — after results
+            // appeared there was no way to refine the search, because every
+            // useful follow-up (a price, a bedroom count, a date) has a number
+            // in it. Anything that isn't a pick falls through to normal
+            // handling so it runs as a fresh query.
+            const listingNum = this.parseListingPick(cleanMessage);
+            if (listingNum !== null) {
                 console.log('✅ User selected listing #', listingNum);
                 this.handleListingView(listingNum);
                 return true;
@@ -1309,7 +1470,7 @@ class AIChatHandler {
             // Check affirmative OR explicit message intent OR likes it + has listing
             if ((isAffirmative || wantsToMessage || likesIt) && this.currentViewedListing) {
                 console.log('✅ User wants to contact landlord (affirmative/keyword match)');
-                this.appendMessage('AI', `Great! I'll reach out to the landlord for "${this.currentViewedListing.title}"...`, 'left');
+                // Superseded by the "Negotiating for you" card below.
                 this.pendingUserResponse = null;
                 setTimeout(() => this.startNegotiationForListing(this.currentViewedListing), 1000);
                 return true;
@@ -1323,10 +1484,9 @@ class AIChatHandler {
 
         // Handle continue browsing response
         if (this.pendingUserResponse === 'continue_browsing') {
-            // Check if they want to view another listing
-            const numberMatch = cleanMessage.match(/(\d+)/);
-            if (numberMatch) {
-                const listingNum = parseInt(numberMatch[1]);
+            // Same rule as above: a pick, not merely a message containing a digit.
+            const listingNum = this.parseListingPick(cleanMessage);
+            if (listingNum !== null) {
                 console.log('✅ User wants to view another listing #', listingNum);
                 this.handleListingView(listingNum);
                 return true;
@@ -1448,6 +1608,140 @@ class AIChatHandler {
     }
 
     // Start negotiation for a specific listing - HUMAN-LIKE PHASED APPROACH
+    // When Contact is clicked for a listing that already has a conversation,
+    // the intro guards skip generation — but the user still needs to SEE the
+    // negotiation. Replay the recent messages into the chat instead of
+    // returning silently. Uses displayMessage (not appendMessage) so the
+    // replayed thread isn't re-saved into ai_chat_history.
+    // Single entry point for everything the AI says to a landlord.
+    //
+    // Sends the listing, the tenant's goal-panel parameters and the full thread
+    // to /api/negotiate/reply. The model decides the wording and the tactic;
+    // the backend refuses any commitment above min(asking price, budget) and
+    // marks settled terms so they are never renegotiated.
+    //
+    // `landlordMessage` is null for first contact.
+    async generateNegotiationReply(landlordMessage, listing) {
+        const goals = (typeof window !== 'undefined' && typeof window.getTenantGoals === 'function')
+            ? window.getTenantGoals()
+            : {};
+
+        // Thread for this landlord, oldest first, in the shape the API expects.
+        let messageHistory = [];
+        try {
+            if (this.activeConversationId) {
+                const { data } = await this.supabase
+                    .from('messages')
+                    .select('sender_email, content, created_at')
+                    .eq('conversation_id', this.activeConversationId)
+                    .order('created_at', { ascending: true })
+                    .limit(30);
+                messageHistory = (data || []).map(m => ({
+                    sender: m.sender_email === this.currentUser?.email
+                        || m.sender_email === 'ai-negotiator@roomfinder.com' ? 'ai' : 'landlord',
+                    content: String(m.content || '').split('\n\n———\n\n')[0]
+                }));
+            }
+        } catch (e) {
+            console.warn('Could not load thread for reply generation:', e?.message || e);
+        }
+
+        const res = await fetch('/api/negotiate/reply', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                listing: { price: listing?.price, title: listing?.title, city: listing?.city },
+                tenantParams: goals,
+                messageHistory,
+                lastLandlordMessage: landlordMessage || '',
+                userEmail: this.currentUser?.email
+            })
+        });
+        if (!res.ok) throw new Error(`Negotiator API returned ${res.status}`);
+        const data = await res.json();
+
+        if (data.guard?.overridden) {
+            console.warn('🛡️ Price ceiling enforced:', data.guard.reason);
+        }
+        console.log(`💬 Reply (${data.tactic || 'no tactic'}):`, data.message);
+
+        // Deal done: rent agreed AND viewing booked. Announce it once — the
+        // tenant previously had to reverse-engineer this from the transcript.
+        if (data.dealClosed && !this._dealAnnounced) {
+            this._dealAnnounced = true;
+            this.announceDealClosed(data);
+        }
+
+        // delay: keep the human-like pause the caller already expects.
+        return { message: data.message, delay: 1500 + Math.floor(Math.random() * 2500), guard: data.guard };
+    }
+
+    // Congratulate the tenant when the negotiation completes, and fire a
+    // browser notification so it lands even if the tab isn't focused — the
+    // whole point of an auto-negotiator is that you walk away from it.
+    announceDealClosed(data) {
+        const price = data.agreedPrice ? `$${data.agreedPrice}/month` : 'the agreed rent';
+        const when = data.viewingWhen ? ` Viewing is booked for ${data.viewingWhen}.` : '';
+        const saved = data.savedVsAsking > 0
+            ? ` You saved $${data.savedVsAsking}/month off the asking price, about $${data.savedVsAsking * 12} a year.`
+            : '';
+
+        // Big top-right banner with the numbers and the next steps. Defined on
+        // the negotiator page; the chat still prints a summary line for anyone
+        // scrolling back later.
+        if (typeof window !== 'undefined' && typeof window.showDealBanner === 'function') {
+            window.showDealBanner(data);
+        }
+
+        this.appendMessage('AI', `🎉 Deal agreed at ${price}.${when}${saved}`, 'left');
+        this.appendMessage('AI', `Nothing else for me to do here. Turn up, look the place over, and sign if you're happy.`, 'left');
+
+        try { this.playNotificationSound(); } catch (e) { /* audio optional */ }
+
+        if (typeof Notification !== 'undefined') {
+            const show = () => new Notification('Deal agreed 🎉', {
+                body: `${price}.${when}`.trim(),
+                icon: '/icons/icon-192x192.png'
+            });
+            if (Notification.permission === 'granted') show();
+            else if (Notification.permission !== 'denied') {
+                Notification.requestPermission().then(p => { if (p === 'granted') show(); });
+            }
+        }
+    }
+
+    async showExistingConversation(conversationId, listing) {
+        this.appendMessage('AI', `You already have a conversation going with this landlord for "${listing.title}", here's where it stands:`, 'left');
+        try {
+            const { data: recent, error } = await this.supabase
+                .from('messages')
+                .select('sender_email, content, created_at')
+                .eq('conversation_id', conversationId)
+                .order('created_at', { ascending: false })
+                .limit(10);
+            if (error || !recent || recent.length === 0) {
+                if (error) console.warn('⚠️ Could not load existing conversation messages:', error.message);
+                this.appendMessage('AI', 'Open your Messages inbox to view the full conversation.', 'left');
+                return;
+            }
+            this._replaying = true;
+            for (const msg of recent.reverse()) {
+                if (typeof msg.content !== 'string') continue;
+                const isMe = msg.sender_email === this.currentUser?.email;
+                const sender = isMe ? 'You'
+                             : msg.sender_email === 'ai-negotiator@roomfinder.com' ? 'AI Negotiator'
+                             : 'Landlord';
+                this.displayMessage(sender, msg.content, isMe ? 'right' : 'left');
+            }
+            this._replaying = false;
+            this.appendMessage('AI', "I'm still monitoring this negotiation, any landlord reply will appear here automatically.", 'left');
+        } catch (e) {
+            this._replaying = false;
+            console.warn('⚠️ showExistingConversation failed:', e?.message || e);
+            this.appendMessage('AI', 'Open your Messages inbox to view the full conversation.', 'left');
+        }
+    }
+
     async startNegotiationForListing(listing) {
         // DEBUG: log the call stack so we can pin down WHICH caller is firing
         // the duplicate intro path. Three intros ~60s apart were still
@@ -1455,7 +1749,22 @@ class AIChatHandler {
         // the leaking caller in production. Remove once root cause is fixed.
         console.log('📍 startNegotiationForListing called for listing', listing?.id, '— stack:\n', new Error().stack);
         try {
-            this.appendMessage('AI', `Starting conversation with landlord for "${listing.title}"...`, 'left');
+            // One structured card instead of three consecutive status lines
+            // ("I'll reach out…", "Messaging the landlord…", "I'll handle the
+            // conversation…"). Same information, a quarter of the noise.
+            this.appendMessageHTML('AI', `
+                <div style="background:#F5F6FA;border:1px solid #E4E7EF;border-left:3px solid #6366F1;border-radius:10px;padding:11px 13px;">
+                    <div style="font-size:10px;font-weight:800;letter-spacing:.11em;text-transform:uppercase;color:#6366F1;margin-bottom:5px;">
+                        Negotiating for you
+                    </div>
+                    <div style="font-size:13.5px;font-weight:600;color:#1F2937;line-height:1.35;">${listing.title}</div>
+                    <div style="font-size:12px;color:#6B7280;margin-top:3px;">
+                        ${listing.price ? 'Asking $' + listing.price + '/mo' : ''}${listing.city || listing.location ? ' · ' + (listing.city || listing.location) : ''}
+                    </div>
+                    <div style="font-size:12px;color:#4B5563;margin-top:8px;padding-top:8px;border-top:1px solid #E4E7EF;">
+                        I'll message them, handle the back and forth, and tell you when it's agreed.
+                    </div>
+                </div>`, 'left');
 
             if (!this.currentUser?.email) {
                 this.appendMessage('AI', 'You need to be logged in to contact landlords.', 'left');
@@ -1548,6 +1857,7 @@ class AIChatHandler {
                 this.activeConversationId = conversationId;
                 this.activeListing = listing;
                 this.setupConversationAutoReply(conversationId, this.activeNegotiationId, listing);
+                await this.showExistingConversation(conversationId, listing);
                 return;
             }
             try {
@@ -1571,6 +1881,7 @@ class AIChatHandler {
                     this.activeConversationId = conversationId;
                     this.activeListing = listing;
                     this.setupConversationAutoReply(conversationId, this.activeNegotiationId, listing);
+                    await this.showExistingConversation(conversationId, listing);
                     return;
                 }
             } catch (historyCheckErr) {
@@ -1630,9 +1941,10 @@ class AIChatHandler {
                         // races with this branch sees the flag immediately.
                         this.sentIntroConversations.add(conversationId);
 
-                        this.appendMessage('AI', `Reached out to the landlord for "${listing.title}"`, 'left');
-                        this.appendMessage('AI', `Sent: "${conversationData.message}"`, 'left');
-                        this.appendMessage('AI', `I'll continue the conversation naturally when they reply - building rapport before discussing price.`, 'left');
+
+                        // The message itself renders below as an AI Negotiator bubble,
+                        // so echoing it here duplicated every outgoing line.
+                        // The card already says this.
 
                         // Set up auto-reply listener for this conversation
                         this.setupConversationAutoReply(conversationId, conversationData.negotiationId, listing);
@@ -1734,17 +2046,14 @@ class AIChatHandler {
         try {
             console.log('🤖 Auto-replying to landlord message...');
 
-            if (!this.negotiationEngine) {
-                console.error('No negotiation engine available');
-                return;
-            }
-
-            // Get phased response from negotiation engine
-            const response = await this.negotiationEngine.handleLandlordReplyWithPhases(
-                landlordMessage.content,
-                negotiationId,
-                listing
-            );
+            // Reply generation now goes through /api/negotiate/reply: one call
+            // where the model reads the whole transcript and decides what to
+            // say, with the backend enforcing the price ceiling from the
+            // tenant's own parameters. The old phase machine
+            // (handleLandlordReplyWithPhases) inferred "what is happening" from
+            // keyword regexes, which is what accepted $5,000 on a $3,675 flat
+            // and re-opened settled rent three times in one conversation.
+            const response = await this.generateNegotiationReply(landlordMessage.content, listing);
 
             if (response && response.message) {
                 // Apply human-like delay before responding
@@ -1766,14 +2075,16 @@ class AIChatHandler {
                     this.currentUser.email,
                     listing.user_email,
                     listing.title,
-                    landlordMessage.id
+                    landlordMessage.id,
+                    false // reply — disclosure already made at first contact
                 );
 
                 if (sent) {
                     console.log(`✅ Sent ${response.phase} response:`, response.message);
 
                     // Notify user about the exchange
-                    this.appendMessage('AI', `Landlord replied: "${landlordMessage.content}"`, 'left');
+                    // The landlord's message already renders as its own bubble via
+                    // displayIncomingMessage — echoing it here printed everything twice.
                     this.appendMessage('AI', `I responded (${response.phase.replace(/_/g, ' ').toLowerCase()}): "${response.message}"`, 'left');
                 } else {
                     console.error('Failed to send auto-reply');
@@ -1848,6 +2159,76 @@ class AIChatHandler {
     }
 
     // Clear conversation history
+    // Full stop-and-reset for the negotiator.
+    //
+    // clearConversationHistory() only wipes the assistant transcript. The
+    // landlord negotiation itself lives in `conversations` / `messages`, and
+    // the intro guards treat an existing thread as "already introduced" — so
+    // after a test run the AI would silently refuse to start over. This tears
+    // down the live listeners, deletes the tenant's threads for the active
+    // listing (or all of them when no listing is active), and clears every
+    // in-memory flag so the next Contact click is a genuine first contact.
+    //
+    // Returns a short human-readable summary of what was removed.
+    async resetNegotiation({ scope = 'active' } = {}) {
+        const email = this.currentUser?.email;
+        if (!email || !this.supabase) return 'Not signed in — nothing to reset.';
+
+        // 1. Stop live work: drop every realtime subscription we own.
+        let listenersClosed = 0;
+        if (this.autoReplyChannels) {
+            for (const channel of this.autoReplyChannels.values()) {
+                try { this.supabase.removeChannel(channel); listenersClosed++; } catch (e) { /* already gone */ }
+            }
+            this.autoReplyChannels.clear();
+        }
+
+        // 2. Delete the threads. Scoped to the open listing when there is one,
+        //    otherwise every thread this tenant is part of.
+        const listingId = scope === 'active' ? this.activeListing?.id : null;
+
+        // Delete server-side. RLS blocks DELETE from the browser key and
+        // PostgREST returns 200 with zero rows removed, so the old client-side
+        // delete silently did nothing while reporting success.
+        let removed = 0;
+        let resetNote = null;
+        try {
+            const resp = await fetch('/api/negotiate/reset', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ userEmail: email, listingId })
+            });
+            if (!resp.ok) throw new Error(`reset API returned ${resp.status}`);
+            const result = await resp.json();
+            removed = result.conversationsDeleted || 0;
+            resetNote = result.note;
+            if (result.remaining) console.warn('Reset: some threads survived:', result.remaining);
+        } catch (e) {
+            console.error('Reset failed:', e);
+            return `Reset failed: ${e.message}. Nothing was deleted.`;
+        }
+
+        // 3. Clear in-memory negotiation state on both objects.
+        this.sentIntroConversations?.clear?.();
+        this.activeConversationId = null;
+        this.activeNegotiationId = null;
+        this.activeListing = null;
+        this.activeNegotiations?.clear?.();
+        if (this.negotiationEngine) {
+            this.negotiationEngine.conversationStates?.clear?.();
+            this.negotiationEngine.activeNegotiations?.clear?.();
+        }
+
+        // 4. Wipe the assistant transcript too, so the panel starts empty.
+        await this.clearConversationHistory();
+
+        const scopeLabel = listingId ? 'for this listing' : 'across all listings';
+        console.log(`♻️ Reset complete — ${removed} thread(s) deleted ${scopeLabel}, ${listenersClosed} listener(s) closed.`);
+        return removed
+            ? `Reset done — deleted ${removed} negotiation thread${removed === 1 ? '' : 's'} ${scopeLabel} and stopped ${listenersClosed} live listener${listenersClosed === 1 ? '' : 's'}.`
+            : `Reset done — ${resetNote || 'no saved threads found'}. Stopped ${listenersClosed} live listener${listenersClosed === 1 ? '' : 's'}.`;
+    }
+
     async clearConversationHistory() {
         this.conversationHistory = [];
 
@@ -1867,24 +2248,74 @@ class AIChatHandler {
         }
 
         // Clear UI
-        const messages = document.getElementById('chatMessages');
+        const messages = this.getChatContainer();
         if (messages) {
             messages.innerHTML = '';
         }
     }
 
+    // Resolve the chat container to render into.
+    //
+    // ai-negotiator.html has TWO containers: the always-visible in-page panel
+    // (#negotiatorChatMessages) and the floating widget's #chatMessages, which
+    // sits inside #chatModal — styled opacity:0 / pointer-events:none until
+    // .active. Rendering unconditionally into #chatMessages meant the whole
+    // negotiation (intro generated, message sent to the landlord, replies)
+    // was written into an invisible element, so the page looked dead even
+    // though every step had succeeded. Prefer the visible panel when it
+    // exists; other pages still fall back to #chatMessages.
+    getChatContainer() {
+        return document.getElementById('negotiatorChatMessages')
+            || document.getElementById('chatMessages');
+    }
+
+    // Scroll the pane that actually scrolls. #negotiatorChatMessages is a plain
+    // flex column with no overflow of its own — the scrollbar belongs to its
+    // parent (#chatContainer), so setting scrollTop on the message list did
+    // nothing and new messages stayed below the fold. Walk up to the first
+    // scrollable ancestor and pin it to the bottom.
+    scrollToLatest(fromEl) {
+        // Find the ancestor that genuinely scrolls, by checking its computed
+        // overflow — not by comparing scrollHeight to clientHeight. The message
+        // list is a flex column with no overflow of its own, but it GROWS with
+        // content, so scrollHeight exceeds clientHeight and the old height test
+        // stopped there and set scrollTop on an element that cannot scroll.
+        const scrollable = (el) => {
+            if (!el || el === document.body) return null;
+            const oy = getComputedStyle(el).overflowY;
+            return (oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight ? el : null;
+        };
+        let pane = null;
+        for (let el = fromEl; el && el !== document.body; el = el.parentElement) {
+            pane = scrollable(el);
+            if (pane) break;
+        }
+        pane = pane || document.getElementById('chatContainer');
+        if (!pane) return;
+
+        // Two frames: one for layout to settle after the node is inserted, one
+        // for images/cards that change height on the following tick.
+        const pin = () => { pane.scrollTop = pane.scrollHeight; };
+        requestAnimationFrame(() => { pin(); requestAnimationFrame(pin); });
+        setTimeout(pin, 120);
+    }
+
     // Display message to chat (without saving to history)
     displayMessage(sender, message, align, isTypingIndicator = false) {
-        const messages = document.getElementById('chatMessages');
+        const messages = this.getChatContainer();
         if (!messages) {
-            console.error('Error: #chatMessages element not found');
+            console.error('Error: no chat container element found');
             return;
         }
 
         const messageDiv = document.createElement('div');
         // Use align parameter: 'right' = sent (user), 'left' = received (other)
         const alignClass = align === 'right' ? 'sent' : 'received';
-        messageDiv.className = `message ${alignClass}`;
+        // Tag AI-authored messages so they can be tinted apart from the
+        // landlord's — both sit on the left and were otherwise identical.
+        const who = String(sender || '').toLowerCase();
+        const aiClass = (who === 'ai negotiator' || who === 'ai') ? ' from-ai' : '';
+        messageDiv.className = `message ${alignClass}${aiClass}`;
 
         // Determine display name
         let displayName = sender;
@@ -1902,7 +2333,7 @@ class AIChatHandler {
         `;
 
         messages.appendChild(messageDiv);
-        messages.scrollTop = messages.scrollHeight;
+        this.scrollToLatest(messages);
     }
 
     // Append message to chat and save to history
@@ -1926,7 +2357,7 @@ class AIChatHandler {
 
     // Append HTML message to chat (for cards, buttons, etc.) - doesn't save to history
     appendMessageHTML(sender, htmlContent, align) {
-        const messages = document.getElementById('chatMessages');
+        const messages = this.getChatContainer();
         if (!messages) {
             console.error('Error: #chatMessages element not found');
             return;
@@ -1949,7 +2380,7 @@ class AIChatHandler {
         `;
 
         messages.appendChild(messageDiv);
-        messages.scrollTop = messages.scrollHeight;
+        this.scrollToLatest(messages);
     }
 
     // Remove typing indicator
@@ -1989,7 +2420,7 @@ class AIChatHandler {
 
     // Celebrate negotiation success with visual effects
     celebrateSuccess() {
-        const messages = document.getElementById('chatMessages');
+        const messages = this.getChatContainer();
         if (!messages) return;
 
         // Add celebration animation
