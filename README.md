@@ -9,7 +9,6 @@ RoomFinderAI gives renters the market research and negotiation leverage landlord
  **Web:** [roomfinderai.com](https://www.roomfinderai.com)
 
  **Full documentation:** [`DOCUMENTATION.md`](DOCUMENTATION.md)  
- **Interview learning plan:** [`docs/INTERVIEW_LEARNING_PLAN.md`](docs/INTERVIEW_LEARNING_PLAN.md)
 
 ---
 
