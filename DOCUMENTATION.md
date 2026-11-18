@@ -318,10 +318,10 @@ Notification bell slot is preserved for the AI negotiator page.
 
 Assets are served from **site root**, not `/frontend/`:
 
-- ✅ `/modules/css/main.css`
-- ✅ `/3D House Models/WhatsApp_Image_...png`
-- ✅ `/universal-auth-manager.js`
-- ❌ `/frontend/modules/css/main.css` (404)
+- `/modules/css/main.css`
+- `/3D House Models/WhatsApp_Image_...png`
+- `/universal-auth-manager.js`
+- `/frontend/modules/css/main.css` (404)
 
 ### Site-wide platform banner
 
